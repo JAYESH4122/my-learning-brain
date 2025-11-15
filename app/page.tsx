@@ -50,15 +50,29 @@ export default function Home() {
         }),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        throw new Error(data.error || `Error: ${response.status}`);
       }
 
-      const data = await response.json();
+      // Handle different response types
+      let responseText = "";
+      if (data.error) {
+        responseText = `Error: ${data.error}`;
+      } else if (data.response) {
+        responseText = data.response;
+      } else if (data.answer) {
+        responseText = data.answer;
+      } else if (data.message) {
+        responseText = data.message;
+      } else {
+        responseText = "I received your message.";
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: data.response || data.answer || "I received your message.",
+        content: responseText,
         role: "assistant",
         timestamp: new Date(),
       };
