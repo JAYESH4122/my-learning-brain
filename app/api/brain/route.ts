@@ -143,32 +143,88 @@ Respond with ONLY one word: "question" or "statement".`;
       const topicMatch = inputText.match(/(?:do i know|do you know|do i know about|do you know about|have i learned|have i learned about)\s+(?:about\s+)?(.+)/i);
       const topic = topicMatch ? topicMatch[1].trim() : inputText.replace(/^(do i know|do you know|do i know about|do you know about|have i learned|have i learned about)\s+(?:about\s+)?/i, '').trim();
       
+      // First, ensure we have all user memories for better search
+      if (!userMatches || userMatches.length === 0) {
+        try {
+          const { data: allMemories } = await supabase
+            .from("memories")
+            .select("id, title, body, user_id, memory_type, created_at")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(50);
+          
+          if (allMemories && allMemories.length > 0) {
+            userMatches = allMemories as MemoryMatch[];
+          }
+        } catch (err) {
+          console.error("Error fetching all memories for knowledge check:", err);
+        }
+      }
+      
       // Search for knowledge about this topic in stored memories
+      const topicLower = topic.toLowerCase();
       let knowledgeFound = false;
+      let relatedMemories: MemoryMatch[] = [];
+      let directKnowledge: MemoryMatch | null = null;
+      
       if (userMatches && userMatches.length > 0) {
-        // Check if any stored memory contains information about this topic
-        const topicLower = topic.toLowerCase();
-        knowledgeFound = userMatches.some((m: MemoryMatch) => {
+        // Check for direct knowledge and related topics
+        relatedMemories = userMatches.filter((m: MemoryMatch) => {
           const body = (m.body || "").toLowerCase();
-          // Check if memory contains the topic or "I know about X" pattern
-          return body.includes(topicLower) || 
-                 body.includes(`i know about ${topicLower}`) ||
-                 body.includes(`i know ${topicLower}`);
+          const title = (m.title || "").toLowerCase();
+          
+          // Direct match
+          if (body.includes(topicLower) || 
+              body.includes(`i know about ${topicLower}`) ||
+              body.includes(`i know ${topicLower}`) ||
+              title.includes(topicLower)) {
+            directKnowledge = m;
+            return true;
+          }
+          
+          // Related topics (partial matches)
+          const words = topicLower.split(/\s+/);
+          return words.some((word: string) => word.length > 3 && (body.includes(word) || title.includes(word)));
         });
+        
+        knowledgeFound = directKnowledge !== null || relatedMemories.length > 0;
       }
       
       if (knowledgeFound) {
-        // User knows about this topic
+        // User knows about this topic - create contextual response
+        const context = relatedMemories.map((m: MemoryMatch) => m.body).join("\n\n");
+        
+        const responsePrompt = `You are helping a user check what they know. Based on their stored memories, respond to their question about whether they know about "${topic}".
+
+User's stored knowledge from their database:
+${context}
+
+Question: ${inputText}
+
+INSTRUCTIONS:
+- Respond as if you're checking THEIR knowledge base, not your own
+- Confirm what they know about ${topic} from their stored memories
+- Be conversational and personal
+- If they have related knowledge (e.g., they know about RAG and asking about AI), mention those connections naturally
+- Reference their previous learning if relevant
+- Keep it brief, friendly, and natural
+- Write in second person ("you know...") not first person ("I know...")
+- Focus on what THEY have learned and stored, not general AI knowledge
+
+Respond naturally:`;
+
+        const personalizedResponse = await generateSummary(responsePrompt);
+        
         return NextResponse.json({
           type: "question",
-          response: `Yes, you know about ${topic}.`,
-          answer: `Yes, you know about ${topic}.`,
+          response: personalizedResponse,
+          answer: personalizedResponse,
           known: true,
         });
       } else {
         // User doesn't know about this topic - search and learn
         console.log(`Knowledge check: User doesn't know about ${topic}, searching and learning`);
-        const webAnswer = await generateWithWebSearch(`What is ${topic}? Explain comprehensively.`);
+        const webAnswer = await generateWithWebSearch(`What is ${topic}? Explain comprehensively in a clear, structured way.`);
         
         // Store as "I know about X" statement, not Q&A
         const knowledgeStatement = `I know about ${topic}. ${webAnswer}`;
@@ -232,21 +288,25 @@ Respond with ONLY one word: "question" or "statement".`;
           // We have stored memories - use them to answer
           const context = sortedMatches.map((m: MemoryMatch) => m.body).join("\n\n");
           
-          const answerPrompt = `You have access to stored information about the user. Answer the question directly and accurately based ONLY on the stored information below. 
+          const answerPrompt = `You are a helpful assistant with access to the user's personal knowledge base. Answer the question naturally and conversationally based on their stored memories.
 
-CRITICAL INSTRUCTIONS:
-- Extract the EXACT, SPECIFIC information that directly answers the question
-- If multiple answers exist (e.g., multiple names), use the MOST RECENT or MOST SPECIFIC one
-- For personal information (name, password, etc.), extract the EXACT value as stored
-- Be direct - just provide the answer, no extra explanations
-- If the stored information does NOT contain the answer, respond with exactly: "NOT_IN_STORED_INFO"
-
-Stored Information (most relevant first):
+The user's stored knowledge:
 ${context}
 
 Question: ${inputText}
 
-Answer (extract the exact value, or "NOT_IN_STORED_INFO" if not found):`;
+INSTRUCTIONS:
+- Answer based ONLY on the user's stored memories above
+- Be conversational and natural, like talking to a friend
+- Reference their stored information naturally
+- If they have related knowledge, you can mention it
+- Extract the EXACT information that answers the question
+- If multiple answers exist, use the MOST RECENT or MOST SPECIFIC one
+- For personal info (name, password), extract the EXACT value
+- If the stored information does NOT contain the answer, respond with exactly: "NOT_IN_STORED_INFO"
+- Write as if you're recalling what they know, not what you know as an AI
+
+Answer naturally and conversationally:`;
 
           const answer = await generateSummary(answerPrompt);
           

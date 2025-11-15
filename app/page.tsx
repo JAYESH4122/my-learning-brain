@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Brain, Loader2 } from "lucide-react";
+import { Send, Bot, User, Brain, Loader2, Trash2, BookOpen, Sparkles } from "lucide-react";
 
 interface Message {
   id: string;
@@ -16,11 +16,15 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Focus input on mount
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,7 +32,7 @@ export default function Home() {
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: input,
+      content: input.trim(),
       role: "user",
       timestamp: new Date(),
     };
@@ -56,7 +60,6 @@ export default function Home() {
         throw new Error(data.error || `Error: ${response.status}`);
       }
 
-      // Handle different response types
       let responseText = "";
       if (data.error) {
         responseText = `Error: ${data.error}`;
@@ -67,7 +70,7 @@ export default function Home() {
       } else if (data.message) {
         responseText = data.message;
       } else {
-        responseText = "I received your message.";
+        responseText = "I received your message. How can I help you further?";
       }
 
       const assistantMessage: Message = {
@@ -89,6 +92,7 @@ export default function Home() {
   const clearChat = () => {
     setMessages([]);
     setError(null);
+    inputRef.current?.focus();
   };
 
   const formatTime = (date: Date) => {
@@ -98,133 +102,170 @@ export default function Home() {
     });
   };
 
+  // Format message content with better readability
+  const formatMessageContent = (content: string) => {
+    return content.split('\n').map((line, index) => (
+      <p key={index} className="mb-2 last:mb-0">
+        {line}
+      </p>
+    ));
+  };
+
   return (
-    <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-indigo-600 rounded-lg">
-                <Brain className="w-6 h-6 text-white" />
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {/* Enhanced Header */}
+      <header className="bg-slate-800/90 backdrop-blur-md border-b border-slate-700/50 shadow-xl sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center space-x-3 sm:space-x-4">
+              <div className="relative group">
+                <div className="p-2.5 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg transform group-hover:scale-105 transition-transform duration-200">
+                  <Brain className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
+                </div>
+                <div className="absolute -inset-1 bg-blue-400/20 rounded-xl blur-sm group-hover:blur-md transition-all duration-300"></div>
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">
+                <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-blue-200 to-blue-400 bg-clip-text text-transparent">
                   Learning Brain
                 </h1>
-                <p className="text-sm text-gray-600">
-                  Store knowledge and get intelligent answers
+                <p className="text-xs sm:text-sm text-slate-300 hidden sm:flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  AI-powered knowledge assistant
                 </p>
               </div>
             </div>
-            <button
-              onClick={clearChat}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Clear Chat
-            </button>
+            
+            <div className="flex items-center space-x-2">
+              {messages.length > 0 && (
+                <div className="hidden sm:block text-sm text-slate-400 bg-slate-700/50 px-3 py-1 rounded-lg">
+                  {messages.length} message{messages.length !== 1 ? 's' : ''}
+                </div>
+              )}
+              <button
+                onClick={clearChat}
+                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-xl transition-all duration-200 border border-slate-600/50 hover:border-blue-500/30 backdrop-blur-sm group"
+              >
+                <Trash2 className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                <span className="hidden sm:inline">Clear Chat</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main Chat Container */}
-      <main className="max-w-4xl mx-auto px-4 py-6 h-[calc(100vh-140px)]">
-        <div className="bg-white rounded-2xl shadow-xl h-full flex flex-col">
+      {/* Enhanced Main Chat Container */}
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 h-[calc(100vh-80px)] py-4">
+        <div className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl h-full flex flex-col overflow-hidden">
           {/* Messages Container */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div 
+            ref={messagesContainerRef}
+            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-slate-800/20 to-slate-900/10"
+          >
             {messages.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 mx-auto mb-4 bg-indigo-100 rounded-full flex items-center justify-center">
-                  <Brain className="w-8 h-8 text-indigo-600" />
+              <div className="text-center py-8 sm:py-16 h-full flex flex-col justify-center">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 sm:mb-6 bg-gradient-to-br from-blue-500/20 to-blue-600/20 rounded-2xl flex items-center justify-center shadow-lg">
+                  <Brain className="w-8 h-8 sm:w-10 sm:h-10 text-blue-400" />
                 </div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                <h2 className="text-xl sm:text-2xl font-semibold text-white mb-3">
                   Welcome to Learning Brain
                 </h2>
-                <p className="text-gray-600 max-w-md mx-auto">
-                  Start by sharing something you've learned, or ask a question
-                  about your stored knowledge.
+                <p className="text-slate-300 max-w-md mx-auto mb-6 sm:mb-8 text-sm sm:text-base leading-relaxed">
+                  Start a conversation by sharing knowledge or asking questions.
                 </p>
-                <div className="mt-6 grid grid-cols-1 gap-3 max-w-xs mx-auto">
-                  <div className="text-left p-3 bg-blue-50 rounded-lg">
-                    <p className="text-sm text-blue-800">
-                      <strong>Example:</strong> "I learned that photosynthesis
-                      converts light energy to chemical energy"
+                <div className="mt-6 space-y-3 max-w-sm mx-auto">
+                  <div className="text-left p-4 bg-slate-700/30 border border-slate-600/30 rounded-xl backdrop-blur-sm hover:border-blue-500/20 transition-all duration-300 group cursor-pointer" onClick={() => setInput("I learned that photosynthesis converts light energy to chemical energy")}>
+                    <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
+                      <strong className="text-blue-400">Share:</strong> "I learned that photosynthesis converts light energy to chemical energy"
                     </p>
                   </div>
-                  <div className="text-left p-3 bg-green-50 rounded-lg">
-                    <p className="text-sm text-green-800">
-                      <strong>Example:</strong> "What do you know about energy
-                      conversion?"
+                  <div className="text-left p-4 bg-slate-700/30 border border-slate-600/30 rounded-xl backdrop-blur-sm hover:border-blue-500/20 transition-all duration-300 group cursor-pointer" onClick={() => setInput("What do you know about energy conversion?")}>
+                    <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
+                      <strong className="text-blue-400">Ask:</strong> "What do you know about energy conversion?"
                     </p>
                   </div>
                 </div>
               </div>
             ) : (
-              messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex gap-4 ${
-                    message.role === "user" ? "flex-row-reverse" : "flex-row"
-                  }`}
-                >
-                  {/* Avatar */}
+              <div className="space-y-4">
+                {messages.map((message, index) => (
                   <div
-                    className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                      message.role === "user" ? "bg-blue-600" : "bg-indigo-600"
-                    }`}
+                    key={message.id}
+                    className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}
                   >
-                    {message.role === "user" ? (
-                      <User className="w-4 h-4 text-white" />
-                    ) : (
-                      <Bot className="w-4 h-4 text-white" />
-                    )}
-                  </div>
+                    {/* Enhanced Avatar */}
+                    <div className={`shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-lg ${
+                      message.role === "user" 
+                        ? "bg-gradient-to-br from-blue-500 to-blue-600" 
+                        : "bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600/50"
+                    }`}>
+                      {message.role === "user" ? (
+                        <User className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      ) : (
+                        <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      )}
+                    </div>
 
-                  {/* Message Bubble */}
-                  <div
-                    className={`max-w-[70%] rounded-2xl px-4 py-2 ${
+                    {/* Enhanced Message Bubble */}
+                    <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 shadow-lg backdrop-blur-sm ${
                       message.role === "user"
-                        ? "bg-blue-600 text-white rounded-br-none"
-                        : "bg-gray-100 text-gray-900 rounded-bl-none"
-                    }`}
-                  >
-                    <p className="text-sm whitespace-pre-wrap">
-                      {message.content}
-                    </p>
-                    <div
-                      className={`text-xs mt-1 ${
-                        message.role === "user"
-                          ? "text-blue-200"
-                          : "text-gray-500"
-                      }`}
-                    >
-                      {formatTime(message.timestamp)}
+                        ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white"
+                        : "bg-slate-700/60 text-slate-100 border border-slate-600/30"
+                    }`}>
+                      {/* Message Content with Better Typography */}
+                      <div className="text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                        {formatMessageContent(message.content)}
+                      </div>
+                      
+                      {/* Timestamp */}
+                      <div className={`text-xs mt-2 font-medium flex items-center gap-2 ${
+                        message.role === "user" ? "text-blue-200/80" : "text-slate-400"
+                      }`}>
+                        <span>{formatTime(message.timestamp)}</span>
+                        {message.role === "assistant" && (
+                          <span className="flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            AI
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
 
-            {/* Loading Indicator */}
+            {/* Enhanced Loading Indicator */}
             {isLoading && (
-              <div className="flex gap-4">
-                <div className="shrink-0 w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-white" />
+              <div className="flex gap-3">
+                <div className="shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600/50 flex items-center justify-center shadow-lg">
+                  <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                 </div>
-                <div className="bg-gray-100 text-gray-900 rounded-2xl rounded-bl-none px-4 py-3">
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                <div className="bg-slate-700/60 text-slate-100 rounded-2xl px-4 py-3 border border-slate-600/30 shadow-lg backdrop-blur-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0.1s" }}></div>
+                      <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }}></div>
+                    </div>
+                    <span className="text-sm text-slate-300">Thinking...</span>
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Error Message */}
+            {/* Enhanced Error Message */}
             {error && (
-              <div className="flex gap-4">
-                <div className="shrink-0 w-8 h-8 rounded-full bg-red-600 flex items-center justify-center">
-                  <Bot className="w-4 h-4 text-white" />
+              <div className="flex gap-3">
+                <div className="shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shadow-lg">
+                  <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                 </div>
-                <div className="bg-red-50 text-red-800 rounded-2xl rounded-bl-none px-4 py-3 border border-red-200">
-                  <p className="text-sm">Error: {error}</p>
+                <div className="bg-red-900/30 text-red-300 rounded-2xl px-4 py-3 border border-red-700/50 shadow-lg backdrop-blur-sm max-w-[85%] sm:max-w-[75%]">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">Something went wrong</p>
+                      <p className="text-xs mt-1 opacity-90">{error}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -232,35 +273,49 @@ export default function Home() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input Form */}
-          <div className="border-t p-6">
-            <form onSubmit={handleSubmit} className="flex gap-4">
-              <div className="flex-1">
+          {/* Enhanced Input Form */}
+          <div className="border-t border-slate-700/30 p-4 sm:p-6 bg-slate-800/40 backdrop-blur-md">
+            <form onSubmit={handleSubmit} className="flex gap-3 sm:gap-4">
+              <div className="flex-1 relative">
                 <input
+                  ref={inputRef}
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Share something you learned or ask a question..."
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-[#000000b0]"
+                  placeholder="Share knowledge or ask a question..."
+                  className="w-full px-4 py-3 sm:px-5 sm:py-4 bg-slate-700/50 border border-slate-600/30 text-white placeholder-slate-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/30 transition-all duration-300 backdrop-blur-sm shadow-lg text-sm sm:text-base"
                   disabled={isLoading}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSubmit(e);
+                    }
+                  }}
                 />
+                {!input && (
+                  <div className="absolute inset-y-0 right-3 flex items-center">
+                    <span className="text-xs text-slate-500 bg-slate-600/30 px-2 py-1 rounded-lg hidden sm:block">
+                      Press Enter to send
+                    </span>
+                  </div>
+                )}
               </div>
               <button
                 type="submit"
                 disabled={!input.trim() || isLoading}
-                className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                className="px-4 py-3 sm:px-6 sm:py-4 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl hover:from-blue-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 flex items-center gap-2 font-medium shadow-lg hover:shadow-blue-500/20 disabled:hover:shadow-none group min-w-[80px] sm:min-w-[100px] justify-center"
               >
                 {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
                 ) : (
-                  <Send className="w-4 h-4" />
+                  <Send className="w-4 h-4 sm:w-5 sm:h-5 group-hover:translate-x-0.5 transition-transform" />
                 )}
-                Send
+                <span className="hidden sm:inline">Send</span>
               </button>
             </form>
-            <p className="text-xs text-gray-500 mt-2 text-center">
-              Your knowledge is stored and used to provide better answers over
-              time
+            <p className="text-xs text-slate-500 mt-3 text-center flex items-center justify-center gap-2">
+              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
+              Your knowledge is stored securely and improves responses over time
             </p>
           </div>
         </div>
