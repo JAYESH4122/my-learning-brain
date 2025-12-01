@@ -1,4 +1,4 @@
-import { generateSummary } from "@/lib/gemini";
+import { generateSummary } from "@/src/lib/gemini";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabaseClient";
-import { generateSummary, generateWithWebSearch } from "@/lib/gemini";
-import { embedText } from "@/lib/embeddings";
+import { supabase } from "@/src/lib/supabaseClient";
+import { generateSummary, generateWithWebSearch } from "@/src/lib/gemini";
+import { embedText } from "@/src/lib/embeddings";
 
 interface MemoryMatch {
   body: string;
