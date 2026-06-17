@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import type { ComponentProps, CSSProperties } from "react";
 import {
   Send,
   Bot,
@@ -11,11 +12,18 @@ import {
   Sparkles,
   Copy,
   Check,
+  Plus,
+  MessageSquare,
+  Clock3,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
+
+const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
+const USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
+const CURRENT_SESSION_KEY = "learning-brain-current-session";
 
 interface Message {
   id: string;
@@ -24,19 +32,112 @@ interface Message {
   timestamp: Date;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ApiChatMessage {
+  id: string;
+  content: string;
+  role: "user" | "assistant";
+  created_at: string;
+}
+
+type MarkdownCodeProps = ComponentProps<"code"> & {
+  inline?: boolean;
+  node?: unknown;
+};
+
+function toChatMessages(apiMessages: ApiChatMessage[]): Message[] {
+  return apiMessages.map((message) => ({
+    id: message.id,
+    content: message.content,
+    role: message.role,
+    timestamp: new Date(message.created_at),
+  }));
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const hasLoadedStoredSession = useRef(false);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const loadSessions = useCallback(async () => {
+    setIsLoadingSessions(true);
+
+    try {
+      const response = await fetch(
+        `/api/chat-sessions?userId=${encodeURIComponent(USER_ID)}`
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load sessions");
+      }
+
+      setSessions(data.sessions ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load sessions");
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    setIsLoadingSession(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/chat-sessions/${sessionId}?userId=${encodeURIComponent(USER_ID)}`
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load this session");
+      }
+
+      setCurrentSessionId(data.session.id);
+      setMessages(toChatMessages(data.messages ?? []));
+      window.sessionStorage.setItem(CURRENT_SESSION_KEY, data.session.id);
+      inputRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load session");
+    } finally {
+      setIsLoadingSession(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
+  useEffect(() => {
+    if (hasLoadedStoredSession.current) return;
+    hasLoadedStoredSession.current = true;
+
+    const storedSessionId = window.sessionStorage.getItem(CURRENT_SESSION_KEY);
+    if (storedSessionId) {
+      void loadSession(storedSessionId);
+    }
+  }, [loadSession]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,7 +161,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           inputText: userMessage.content,
-          userId: "54ad7274-ddff-4727-9ca0-84097b044c11",
+          userId: USER_ID,
+          sessionId: currentSessionId,
         }),
       });
 
@@ -85,7 +187,19 @@ export default function Home() {
         timestamp: new Date(),
       };
 
+      if (data.sessionId) {
+        setCurrentSessionId(data.sessionId);
+        window.sessionStorage.setItem(CURRENT_SESSION_KEY, data.sessionId);
+      }
+
+      if (data.sessionSaved === false && data.sessionError) {
+        setError(
+          `Answer returned, but the chat session was not saved: ${data.sessionError}`
+        );
+      }
+
       setMessages((prev) => [...prev, assistantMessage]);
+      void loadSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
       console.error("Error sending message:", err);
@@ -94,16 +208,62 @@ export default function Home() {
     }
   };
 
-  const clearChat = () => {
+  const startNewChat = () => {
     setMessages([]);
+    setCurrentSessionId(null);
     setError(null);
+    window.sessionStorage.removeItem(CURRENT_SESSION_KEY);
     inputRef.current?.focus();
+  };
+
+  const deleteSession = async (sessionId: string) => {
+    const shouldDelete = window.confirm("Delete this chat session?");
+    if (!shouldDelete) return;
+
+    try {
+      const response = await fetch(
+        `/api/chat-sessions/${sessionId}?userId=${encodeURIComponent(USER_ID)}`,
+        { method: "DELETE" }
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to delete session");
+      }
+
+      setSessions((prev) =>
+        prev.filter((session) => session.id !== sessionId)
+      );
+      if (currentSessionId === sessionId) {
+        startNewChat();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete session");
+    }
   };
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
+    });
+  };
+
+  const formatSessionTime = (value: string) => {
+    const date = new Date(value);
+    const today = new Date();
+    const isToday = date.toDateString() === today.toDateString();
+
+    if (isToday) {
+      return date.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
     });
   };
 
@@ -138,11 +298,11 @@ export default function Home() {
                 </div>
               )}
               <button
-                onClick={clearChat}
+                onClick={startNewChat}
                 className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-xl transition-all duration-200 border border-slate-600/50 hover:border-blue-500/30 backdrop-blur-sm group"
               >
-                <Trash2 className="w-4 h-4 group-hover:scale-110 transition-transform" />
-                <span className="hidden sm:inline">Clear Chat</span>
+                <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                <span className="hidden sm:inline">New Chat</span>
               </button>
             </div>
           </div>
@@ -150,13 +310,87 @@ export default function Home() {
       </header>
 
       {/* Main Chat Container */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 h-[calc(100vh-80px)] py-4">
-        <div className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl h-full flex flex-col overflow-hidden">
-          {/* Messages Container */}
-          <div
-            ref={messagesContainerRef}
-            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-gradient-to-b from-slate-800/20 to-slate-900/10"
-          >
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 h-[calc(100vh-80px)] py-4">
+        <div className="grid h-full grid-rows-[auto_minmax(0,1fr)] gap-4 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1">
+          <aside className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl flex flex-col overflow-hidden max-h-56 lg:max-h-none">
+            <div className="border-b border-slate-700/30 p-3 sm:p-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Clock3 className="w-4 h-4 text-blue-400" />
+                  Sessions
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  {sessions.length} saved
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={startNewChat}
+                title="Start new chat"
+                className="shrink-0 p-2 text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-lg transition-all border border-slate-600/40"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="messages-container flex-1 overflow-y-auto p-2 space-y-1">
+              {isLoadingSessions ? (
+                <div className="flex items-center gap-2 px-3 py-3 text-sm text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading sessions
+                </div>
+              ) : sessions.length === 0 ? (
+                <div className="px-3 py-4 text-sm text-slate-400">
+                  No saved sessions yet.
+                </div>
+              ) : (
+                sessions.map((session) => {
+                  const isActive = session.id === currentSessionId;
+
+                  return (
+                    <div
+                      key={session.id}
+                      className={`group flex items-stretch rounded-xl border transition-all ${
+                        isActive
+                          ? "bg-blue-500/15 border-blue-500/40"
+                          : "bg-slate-900/20 border-transparent hover:bg-slate-700/30 hover:border-slate-600/30"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void loadSession(session.id)}
+                        disabled={isLoadingSession}
+                        className="min-w-0 flex-1 px-3 py-2 text-left disabled:cursor-wait"
+                      >
+                        <span className="flex items-center gap-2 text-sm text-slate-100">
+                          <MessageSquare className="w-4 h-4 shrink-0 text-blue-300" />
+                          <span className="truncate">{session.title}</span>
+                        </span>
+                        <span className="mt-1 block text-xs text-slate-400">
+                          {formatSessionTime(session.updated_at)}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteSession(session.id)}
+                        title="Delete session"
+                        className="shrink-0 px-2 text-slate-500 hover:text-red-300 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+
+          <div className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl h-full flex flex-col overflow-hidden min-h-0">
+            {/* Messages Container */}
+            <div
+              ref={messagesContainerRef}
+              className="messages-container flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-gradient-to-b from-slate-800/20 to-slate-900/10"
+            >
             {messages.length === 0 ? (
               <div className="text-center py-8 sm:py-16 h-full flex flex-col justify-center">
                 <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 sm:mb-6 bg-gradient-to-br from-blue-500/20 to-blue-600/20 rounded-2xl flex items-center justify-center shadow-lg">
@@ -178,8 +412,8 @@ export default function Home() {
                     }
                   >
                     <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
-                      <strong className="text-blue-400">Code:</strong> "Review
-                      this code: function add..."
+                      <strong className="text-blue-400">Code:</strong>{" "}
+                      &quot;Review this code: function add...&quot;
                     </p>
                   </div>
                   <div
@@ -189,8 +423,8 @@ export default function Home() {
                     }
                   >
                     <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
-                      <strong className="text-blue-400">Ask:</strong> "What do
-                      you know about energy conversion?"
+                      <strong className="text-blue-400">Ask:</strong>{" "}
+                      &quot;What do you know about energy conversion?&quot;
                     </p>
                   </div>
                 </div>
@@ -239,7 +473,8 @@ export default function Home() {
                               className,
                               children,
                               ...props
-                            }: any) {
+                            }: MarkdownCodeProps) {
+                              void node;
                               const match = /language-(\w+)/.exec(
                                 className || ""
                               );
@@ -258,13 +493,12 @@ export default function Home() {
                                       <CopyButton code={codeString} />
                                     </div>
                                     <SyntaxHighlighter
-                                      style={vscDarkPlus}
+                                      style={syntaxHighlighterStyle}
                                       language={match[1]}
                                       PreTag="div"
                                       className="!my-0 !bg-[#1e1e1e] !p-4 scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-transparent"
                                       showLineNumbers={true}
                                       wrapLines={true}
-                                      {...props}
                                     >
                                       {codeString}
                                     </SyntaxHighlighter>
@@ -434,6 +668,7 @@ export default function Home() {
               Your knowledge is stored securely and improves responses over time
             </p>
           </div>
+        </div>
         </div>
       </main>
     </div>

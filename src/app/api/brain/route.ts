@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { saveChatTurn } from "@/src/lib/chatSessions";
 import { supabase } from "@/src/lib/supabaseClient";
 import { generateSummary, generateWithWebSearch } from "@/src/lib/gemini";
 import { embedText } from "@/src/lib/embeddings";
@@ -11,9 +12,192 @@ interface MemoryMatch {
   [key: string]: unknown;
 }
 
+interface SaveGeneratedMemoryOptions {
+  userId: string;
+  title: string;
+  body: string;
+  memoryType: "note" | "question";
+}
+
+interface SaveUserMemoryOptions {
+  userId: string;
+  title: string;
+  body: string;
+  embedding?: number[] | null;
+}
+
+type BrainResponsePayload = Record<string, unknown>;
+
+function truncateTitle(title: string) {
+  return title.length > 60 ? title.slice(0, 57) + "..." : title;
+}
+
+function getErrorMessage(err: unknown) {
+  if (err instanceof Error) return err.message;
+  if (
+    err &&
+    typeof err === "object" &&
+    "message" in err &&
+    typeof err.message === "string"
+  ) {
+    return err.message;
+  }
+
+  if (typeof err === "string") return err;
+
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function getAssistantContent(payload: BrainResponsePayload) {
+  const responseFields = [
+    payload.response,
+    payload.answer,
+    payload.message,
+    payload.error,
+  ];
+
+  const responseText = responseFields.find(
+    (field): field is string => typeof field === "string" && field.length > 0
+  );
+
+  return responseText ?? "I received your message. How can I help you further?";
+}
+
+async function createBrainResponse({
+  payload,
+  userId,
+  inputText,
+  sessionId,
+}: {
+  payload: BrainResponsePayload;
+  userId: string;
+  inputText: string;
+  sessionId?: string | null;
+}) {
+  try {
+    const chatSession = await saveChatTurn({
+      userId,
+      sessionId,
+      userContent: inputText,
+      assistantContent: getAssistantContent(payload),
+    });
+
+    return NextResponse.json({
+      ...payload,
+      sessionId: chatSession.sessionId,
+      chatMessages: chatSession.messages,
+      sessionSaved: true,
+    });
+  } catch (err: unknown) {
+    const sessionError = getErrorMessage(err);
+    console.error("Chat response was returned, but session save failed:", {
+      sessionError,
+      err,
+    });
+
+    return NextResponse.json({
+      ...payload,
+      sessionId,
+      sessionSaved: false,
+      sessionError,
+    });
+  }
+}
+
+async function saveGeneratedMemory({
+  userId,
+  title,
+  body,
+  memoryType,
+}: SaveGeneratedMemoryOptions) {
+  const embedding = await embedText(body);
+
+  const { data: memory, error: memoryError } = await supabase
+    .from("memories")
+    .insert([
+      {
+        user_id: userId,
+        title: truncateTitle(title),
+        body,
+        memory_type: memoryType,
+        source: "gemini",
+      },
+    ])
+    .select()
+    .single();
+
+  if (memoryError) throw memoryError;
+
+  const { error: vectorError } = await supabase
+    .from("memory_vectors")
+    .insert([{ memory_id: memory.id, embedding }]);
+
+  if (vectorError) throw vectorError;
+}
+
+async function trySaveGeneratedMemory(options: SaveGeneratedMemoryOptions) {
+  try {
+    await saveGeneratedMemory(options);
+    return { saved: true };
+  } catch (err: unknown) {
+    const error = getErrorMessage(err);
+    console.error("Generated answer was returned, but memory save failed:", {
+      error,
+      err,
+    });
+    return { saved: false, error };
+  }
+}
+
+async function saveUserMemory({
+  userId,
+  title,
+  body,
+  embedding,
+}: SaveUserMemoryOptions) {
+  const memoryEmbedding = embedding ?? (await embedText(body));
+
+  const { data: memory, error: memoryError } = await supabase
+    .from("memories")
+    .insert([
+      {
+        user_id: userId,
+        title: truncateTitle(title),
+        body,
+        memory_type: "note",
+        source: "user",
+      },
+    ])
+    .select()
+    .single();
+
+  if (memoryError) throw memoryError;
+
+  const { error: vectorError } = await supabase
+    .from("memory_vectors")
+    .insert([{ memory_id: memory.id, embedding: memoryEmbedding }]);
+
+  if (vectorError) throw vectorError;
+}
+
+async function trySaveUserMemory(options: SaveUserMemoryOptions) {
+  try {
+    await saveUserMemory(options);
+    return { saved: true };
+  } catch (err: unknown) {
+    const error = getErrorMessage(err);
+    console.error("User memory save failed:", { error, err });
+    return { saved: false, error };
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const { inputText, userId } = await req.json();
+    const { inputText, userId, sessionId } = await req.json();
 
     if (!inputText || !userId) {
       return NextResponse.json(
@@ -21,6 +205,14 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    const respond = (payload: BrainResponsePayload) =>
+      createBrainResponse({
+        payload,
+        userId,
+        inputText,
+        sessionId: typeof sessionId === "string" ? sessionId : null,
+      });
 
     const lower = inputText.toLowerCase();
     const containsCodeBlock = inputText.includes("```");
@@ -45,7 +237,7 @@ Now perform the full code review based on the standards above.
 
       const reviewResponse = await generateSummary(reviewPrompt);
 
-      return NextResponse.json({
+      return respond({
         type: "code_review",
         response: reviewResponse,
         reviewed: true,
@@ -109,7 +301,7 @@ Respond with ONLY one word: "question" or "statement".`;
 
     // If it's very short and not a question, don't treat it as information to store
     if (isVeryShort && !isQuestion) {
-      return NextResponse.json({
+      return respond({
         type: "note",
         response: "I understand. How can I help you?",
         message: "Acknowledged",
@@ -118,9 +310,10 @@ Respond with ONLY one word: "question" or "statement".`;
 
     // Step 2: Always search existing memories first to find relevant context
     let userMatches: MemoryMatch[] = [];
+    let queryEmbedding: number[] | null = null;
 
     try {
-      const queryEmbedding = await embedText(inputText);
+      queryEmbedding = await embedText(inputText);
 
       const { data: matches, error: matchError } = await supabase.rpc(
         "match_memories",
@@ -170,6 +363,10 @@ Respond with ONLY one word: "question" or "statement".`;
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(30); // Get more recent memories
+
+        if (queryError) {
+          console.error("Error querying fallback memories:", queryError);
+        }
 
         if (!queryError && allMemories && allMemories.length > 0) {
           // Use all memories as context for questions when vector search fails
@@ -290,7 +487,7 @@ Respond naturally:`;
 
         const personalizedResponse = await generateSummary(responsePrompt);
 
-        return NextResponse.json({
+        return respond({
           type: "question",
           response: personalizedResponse,
           answer: personalizedResponse,
@@ -307,36 +504,23 @@ Respond naturally:`;
 
         // Store as "I know about X" statement, not Q&A
         const knowledgeStatement = `I know about ${topic}. ${webAnswer}`;
-        const embedding = await embedText(knowledgeStatement);
-
         const title = `I know about ${topic}`;
 
-        const { data: newMemory, error: newMemoryError } = await supabase
-          .from("memories")
-          .insert([
-            {
-              user_id: userId,
-              title: title.length > 60 ? title.slice(0, 57) + "..." : title,
-              body: knowledgeStatement,
-              memory_type: "note",
-              source: "gemini",
-            },
-          ])
-          .select()
-          .single();
+        const memorySave = await trySaveGeneratedMemory({
+          userId,
+          title,
+          body: knowledgeStatement,
+          memoryType: "note",
+        });
 
-        if (!newMemoryError && newMemory) {
-          await supabase
-            .from("memory_vectors")
-            .insert([{ memory_id: newMemory.id, embedding }]);
-        }
-
-        return NextResponse.json({
+        return respond({
           type: "question",
           response: `No, you don't know about ${topic} yet. Let me search for information about it...\n\n${webAnswer}`,
           answer: `No, you don't know about ${topic} yet. Let me search for information about it...\n\n${webAnswer}`,
           known: false,
           learned: true,
+          saved: memorySave.saved,
+          saveError: memorySave.error,
         });
       }
     }
@@ -420,41 +604,28 @@ Answer naturally and conversationally:`;
             knowledgeStatement = `Q: ${inputText}\nA: ${webAnswer}`;
           }
 
-          const embedding = await embedText(knowledgeStatement);
-
           const title =
             inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
 
-          const { data: newMemory, error: newMemoryError } = await supabase
-            .from("memories")
-            .insert([
-              {
-                user_id: userId,
-                title: title,
-                body: knowledgeStatement,
-                memory_type: "question",
-                source: "gemini",
-              },
-            ])
-            .select()
-            .single();
+          const memorySave = await trySaveGeneratedMemory({
+            userId,
+            title,
+            body: knowledgeStatement,
+            memoryType: "question",
+          });
 
-          if (!newMemoryError && newMemory) {
-            await supabase
-              .from("memory_vectors")
-              .insert([{ memory_id: newMemory.id, embedding }]);
-          }
-
-          return NextResponse.json({
+          return respond({
             type: "question",
             response: webAnswer,
             answer: webAnswer,
             known: false,
             learned: true,
+            saved: memorySave.saved,
+            saveError: memorySave.error,
           });
         }
 
-        return NextResponse.json({
+        return respond({
           type: "question",
           response: answer,
           answer: answer, // For backward compatibility
@@ -480,7 +651,7 @@ Answer naturally and conversationally:`;
       );
 
       if (exactMatch) {
-        return NextResponse.json({
+        return respond({
           type: "note",
           response:
             "I already have this exact information stored. Is there anything else you'd like to add or clarify?",
@@ -506,7 +677,7 @@ Respond with ONLY "same" if they contain the exact same information/fact, or "di
           .toLowerCase();
 
         if (similarity.includes("same") && !similarity.includes("different")) {
-          return NextResponse.json({
+          return respond({
             type: "note",
             response:
               "I already have this information stored. Is there anything else you'd like to add or clarify?",
@@ -516,34 +687,28 @@ Respond with ONLY "same" if they contain the exact same information/fact, or "di
       }
 
       // Store the new information (original text, not summarized)
-      const embedding = await embedText(inputText);
-
       const title =
         inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
 
-      const { data: memory, error: memoryError } = await supabase
-        .from("memories")
-        .insert([
-          {
-            user_id: userId,
-            title: title,
-            body: inputText, // Store original text, not summary
-            memory_type: "note",
-            source: "user",
-          },
-        ])
-        .select()
-        .single();
+      const memorySave = await trySaveUserMemory({
+        userId,
+        title,
+        body: inputText,
+        embedding: queryEmbedding,
+      });
 
-      if (memoryError) throw memoryError;
+      if (!memorySave.saved) {
+        return respond({
+          type: "note",
+          response:
+            "I understood that, but I couldn't save it as a memory right now. Please try again in a moment.",
+          message: "Memory save failed",
+          saved: false,
+          saveError: memorySave.error,
+        });
+      }
 
-      const { error: vectorError } = await supabase
-        .from("memory_vectors")
-        .insert([{ memory_id: memory.id, embedding }]);
-
-      if (vectorError) throw vectorError;
-
-      return NextResponse.json({
+      return respond({
         type: "note",
         response:
           "Got it! I've saved this information. I can recall it when you ask related questions.",
@@ -573,70 +738,49 @@ Respond with ONLY "same" if they contain the exact same information/fact, or "di
         knowledgeStatement = `Q: ${inputText}\nA: ${answer}`;
       }
 
-      const embedding = await embedText(knowledgeStatement);
-
       const title =
         inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
 
-      const { data: newMemory, error: newMemoryError } = await supabase
-        .from("memories")
-        .insert([
-          {
-            user_id: userId,
-            title: title,
-            body: knowledgeStatement, // Store as knowledge statement or Q&A
-            memory_type: "question",
-            source: "gemini",
-          },
-        ])
-        .select()
-        .single();
+      const memorySave = await trySaveGeneratedMemory({
+        userId,
+        title,
+        body: knowledgeStatement,
+        memoryType: "question",
+      });
 
-      if (newMemoryError) throw newMemoryError;
-
-      const { error: vectorError } = await supabase
-        .from("memory_vectors")
-        .insert([{ memory_id: newMemory.id, embedding }]);
-
-      if (vectorError) throw vectorError;
-
-      return NextResponse.json({
+      return respond({
         type: "question",
         response: answer,
         answer: answer, // For backward compatibility
         known: false,
         learned: true,
+        saved: memorySave.saved,
+        saveError: memorySave.error,
       });
     } else {
       // Statement/info with no stored context - store it directly
-      const embedding = await embedText(inputText);
-
       const title =
         inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
 
-      const { data: memory, error: memoryError } = await supabase
-        .from("memories")
-        .insert([
-          {
-            user_id: userId,
-            title: title,
-            body: inputText, // Store original text exactly as provided
-            memory_type: "note",
-            source: "user",
-          },
-        ])
-        .select()
-        .single();
+      const memorySave = await trySaveUserMemory({
+        userId,
+        title,
+        body: inputText,
+        embedding: queryEmbedding,
+      });
 
-      if (memoryError) throw memoryError;
+      if (!memorySave.saved) {
+        return respond({
+          type: "note",
+          response:
+            "I understood that, but I couldn't save it as a memory right now. Please try again in a moment.",
+          message: "Memory save failed",
+          saved: false,
+          saveError: memorySave.error,
+        });
+      }
 
-      const { error: vectorError } = await supabase
-        .from("memory_vectors")
-        .insert([{ memory_id: memory.id, embedding }]);
-
-      if (vectorError) throw vectorError;
-
-      return NextResponse.json({
+      return respond({
         type: "note",
         response:
           "Perfect! I've saved this information. I'll remember it and can reference it when you ask related questions.",
@@ -645,8 +789,7 @@ Respond with ONLY "same" if they contain the exact same information/fact, or "di
     }
   } catch (err: unknown) {
     console.error("Error processing memory:", err);
-    const errorMessage =
-      err instanceof Error ? err.message : "Internal Server Error";
+    const errorMessage = getErrorMessage(err) || "Internal Server Error";
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
