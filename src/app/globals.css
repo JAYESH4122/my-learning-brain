@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+}
+
 :root {
   color-scheme: dark;
   --background: #070a12;
@@ -22,6 +27,7 @@ body {
   max-width: 100%;
   overflow-x: hidden;
   background: var(--background);
+  font-family: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
 }
 
 body {
@@ -31,6 +37,22 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+code,
+pre,
+kbd,
+samp,
+.font-mono,
+.code-block * {
+  font-family: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
 
 .app-stage {

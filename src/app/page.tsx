@@ -382,8 +382,14 @@ export default function Home() {
               >
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </button>
-              <div className="brand-mark hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 sm:flex lg:hidden">
-                <Brain className="h-5 w-5" aria-hidden="true" />
+              <div className="brand-mark hidden h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 sm:flex lg:hidden">
+                <Image
+                  src="/icons/icon-192.png"
+                  alt=""
+                  width={40}
+                  height={40}
+                  className="h-full w-full object-cover"
+                />
               </div>
               <div className="min-w-0">
                 <h1 className="truncate text-sm font-semibold text-white sm:text-base">
@@ -413,13 +419,13 @@ export default function Home() {
             <div
               ref={messagesContainerRef}
               onScroll={updateBottomState}
-              className="messages-container chat-scroll flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
+              className="messages-container chat-scroll flex-1 overflow-y-auto px-2.5 py-3 sm:px-6 sm:py-6"
               aria-live="polite"
             >
               {messages.length === 0 ? (
                 <EmptyState onSelectPrompt={applyPrompt} />
               ) : (
-                <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 sm:gap-5">
                   {messages.map((message) => (
                     <ChatMessage
                       key={message.id}
@@ -431,13 +437,13 @@ export default function Home() {
               )}
 
               {isLoading && (
-                <div className="mx-auto mt-5 w-full max-w-4xl">
+                <div className="mx-auto mt-4 w-full max-w-4xl sm:mt-5">
                   <TypingIndicator />
                 </div>
               )}
 
               {error && (
-                <div className="mx-auto mt-5 w-full max-w-4xl">
+                <div className="mx-auto mt-4 w-full max-w-4xl sm:mt-5">
                   <ErrorMessage message={error} />
                 </div>
               )}
@@ -458,10 +464,10 @@ export default function Home() {
               </button>
             )}
 
-            <div className="composer-zone shrink-0 border-t border-white/10 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-3 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
+            <div className="composer-zone shrink-0 border-t border-white/10 px-2.5 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-2.5 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
               <form
                 onSubmit={handleSubmit}
-                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-2 rounded-2xl border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:gap-2"
+                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-2 rounded-[1.35rem] border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:rounded-2xl"
               >
                 <div className="relative min-w-0 flex-1">
                   <label htmlFor="chat-input" className="sr-only">
@@ -481,7 +487,7 @@ export default function Home() {
                         void submitMessage();
                       }
                     }}
-                    className="max-h-[164px] min-h-[46px] w-full resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2.5 pr-4 text-[16px] leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500"
+                    className="max-h-[164px] min-h-[46px] w-full resize-none overflow-y-auto rounded-[1rem] border border-transparent bg-transparent px-3 py-2.5 pr-4 text-base leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500"
                   />
                 </div>
                 <button
@@ -528,8 +534,14 @@ function SessionNavigation({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-white/10 p-4">
         <div className="flex items-center gap-3">
-          <div className="brand-mark flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 shadow-[0_14px_44px_rgba(37,99,235,0.18)]">
-            <Brain className="h-5 w-5" aria-hidden="true" />
+          <div className="brand-mark flex h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-white/10 shadow-[0_14px_44px_rgba(37,99,235,0.18)]">
+            <Image
+              src="/icons/icon-192.png"
+              alt=""
+              width={44}
+              height={44}
+              className="h-full w-full object-cover"
+            />
           </div>
           <div className="min-w-0">
             <p className="truncate text-base font-semibold text-white">
@@ -746,56 +758,77 @@ function ChatMessage({
   formatTime: (date: Date) => string;
 }) {
   const isUser = message.role === "user";
+  const roleLabel = isUser ? "You" : "Learning Brain";
+  const metaLabel = isUser ? "Sent" : "Assistant";
 
   return (
     <article
-      className={`message-enter flex min-w-0 gap-3 ${
-        isUser ? "flex-row-reverse" : "flex-row"
+      className={`message-enter flex min-w-0 items-end gap-2.5 sm:gap-3 ${
+        isUser ? "justify-end" : "justify-start"
       }`}
     >
-      <div
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl sm:h-10 sm:w-10 ${
-          isUser
-            ? "bg-blue-600 text-white shadow-[0_14px_40px_rgba(37,99,235,0.28)]"
-            : "assistant-avatar border border-blue-300/20 text-blue-100"
-        }`}
-        aria-hidden="true"
-      >
-        {isUser ? (
-          <User className="h-4 w-4 sm:h-5 sm:w-5" />
-        ) : (
-          <Bot className="h-4 w-4 sm:h-5 sm:w-5" />
-        )}
-      </div>
-
-      <div
-        className={`min-w-0 max-w-[min(43rem,calc(100%-3.25rem))] rounded-3xl px-4 py-3 sm:px-5 ${
-          isUser
-            ? "rounded-tr-md bg-blue-600 text-white shadow-[0_18px_52px_rgba(37,99,235,0.18)]"
-            : "rounded-tl-md border border-white/10 bg-white/[0.05] text-slate-100"
-        }`}
-      >
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={createMarkdownComponents(isUser)}
-        >
-          {message.content}
-        </ReactMarkdown>
-
+      {!isUser && (
         <div
-          className={`mt-3 flex items-center gap-2 text-xs font-medium ${
-            isUser ? "text-white/70" : "text-slate-500"
+          className="assistant-avatar hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 shadow-[0_12px_34px_rgba(37,99,235,0.16)] sm:flex"
+          aria-hidden="true"
+        >
+          <Bot className="h-5 w-5" />
+        </div>
+      )}
+
+      <div
+        className={`min-w-0 ${
+          isUser
+            ? "max-w-[84%] rounded-[1.35rem] rounded-br-md border border-blue-300/20 bg-blue-600/95 px-3.5 py-3 text-white shadow-[0_14px_42px_rgba(37,99,235,0.22)] sm:max-w-[min(44rem,78%)] sm:px-4 sm:py-4"
+            : "max-w-full px-1 py-2 text-slate-100 sm:max-w-[min(44rem,78%)] sm:rounded-[1.35rem] sm:rounded-bl-md sm:border sm:border-white/[0.12] sm:bg-[#111827]/90 sm:px-4 sm:py-4 sm:shadow-[0_18px_52px_rgba(0,0,0,0.2)]"
+        }`}
+      >
+        <div
+          className={`mb-2 hidden min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] sm:flex ${
+            isUser ? "text-blue-100/80" : "text-blue-200/80"
           }`}
         >
-          <span>{formatTime(message.timestamp)}</span>
-          {!isUser && (
-            <span className="flex items-center gap-1">
-              <Sparkles className="h-3 w-3" aria-hidden="true" />
-              AI
-            </span>
-          )}
+          <span className="truncate">{roleLabel}</span>
+          <span
+            className={`h-1 w-1 shrink-0 rounded-full ${
+              isUser ? "bg-blue-100/50" : "bg-blue-300/60"
+            }`}
+            aria-hidden="true"
+          />
+          <span className="shrink-0">{metaLabel}</span>
+          <span
+            className={`h-1 w-1 shrink-0 rounded-full ${
+              isUser ? "bg-blue-100/50" : "bg-blue-300/60"
+            }`}
+            aria-hidden="true"
+          />
+          <time className="shrink-0" dateTime={message.timestamp.toISOString()}>
+            {formatTime(message.timestamp)}
+          </time>
+        </div>
+
+        <div
+          className={`message-copy min-w-0 text-base leading-7 ${
+            isUser ? "text-white/95" : "text-slate-100"
+          }`}
+        >
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={createMarkdownComponents(isUser)}
+          >
+            {message.content}
+          </ReactMarkdown>
         </div>
       </div>
+
+      {isUser && (
+        <div
+          className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-[0_12px_34px_rgba(37,99,235,0.26)] sm:flex"
+          aria-hidden="true"
+        >
+          <User className="h-5 w-5" />
+        </div>
+      )}
     </article>
   );
 }
@@ -815,10 +848,10 @@ function createMarkdownComponents(isUser: boolean): Components {
 
       return (
         <code
-          className={`rounded-md px-1.5 py-0.5 font-mono text-[0.9em] ${
+          className={`rounded-md px-1.5 py-0.5 font-mono text-[0.92em] ${
             isUser
-              ? "bg-white/[0.15] text-white"
-              : "bg-white/[0.08] text-blue-100"
+              ? "bg-white/[0.14] text-white"
+              : "bg-blue-400/[0.12] text-blue-100"
           }`}
         >
           {children}
@@ -826,27 +859,47 @@ function createMarkdownComponents(isUser: boolean): Components {
       );
     },
     p: ({ children }) => (
-      <p className="chat-markdown mb-2 text-[15px] leading-7 last:mb-0">
+      <p className="chat-markdown mb-3 leading-7 last:mb-0">{children}</p>
+    ),
+    h1: ({ children }) => (
+      <h1 className="chat-markdown mb-3 mt-1 text-xl font-bold leading-8 text-white first:mt-0">
         {children}
-      </p>
+      </h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="chat-markdown mb-2.5 mt-4 text-lg font-bold leading-7 text-white first:mt-0">
+        {children}
+      </h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="chat-markdown mb-2 mt-3 text-base font-bold leading-7 text-slate-100 first:mt-0">
+        {children}
+      </h3>
+    ),
+    strong: ({ children }) => (
+      <strong
+        className={isUser ? "font-bold text-white" : "font-bold text-blue-100"}
+      >
+        {children}
+      </strong>
     ),
     ul: ({ children }) => (
-      <ul className="chat-markdown mb-2 ml-5 list-disc space-y-1 text-[15px] leading-7">
+      <ul className="chat-markdown mb-3 ml-5 list-disc space-y-2 leading-7 marker:text-blue-300/80 last:mb-0">
         {children}
       </ul>
     ),
     ol: ({ children }) => (
-      <ol className="chat-markdown mb-2 ml-5 list-decimal space-y-1 text-[15px] leading-7">
+      <ol className="chat-markdown mb-3 ml-5 list-decimal space-y-2 leading-7 marker:text-blue-300/80 last:mb-0">
         {children}
       </ol>
     ),
     li: ({ children }) => <li className="pl-1">{children}</li>,
     blockquote: ({ children }) => (
       <blockquote
-        className={`chat-markdown my-3 border-l-2 pl-3 text-[15px] leading-7 ${
+        className={`chat-markdown my-3 rounded-r-2xl border-l-2 py-1 pl-3 leading-7 ${
           isUser
-            ? "border-white/[0.35] text-white/[0.85]"
-            : "border-blue-300/[0.35] text-slate-300"
+            ? "border-white/[0.4] bg-white/[0.08] text-white/[0.9]"
+            : "border-blue-300/[0.45] bg-white/[0.04] text-slate-300"
         }`}
       >
         {children}
@@ -857,29 +910,29 @@ function createMarkdownComponents(isUser: boolean): Components {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className={`underline decoration-2 underline-offset-2 transition ${
+        className={`underline decoration-2 underline-offset-4 transition ${
           isUser
             ? "text-white decoration-white/[0.35] hover:decoration-white"
-            : "text-blue-300 decoration-blue-300/25 hover:decoration-blue-300"
+            : "text-blue-300 decoration-blue-300/30 hover:decoration-blue-200"
         }`}
       >
         {children}
       </a>
     ),
     table: ({ children }) => (
-      <div className="my-3 max-w-full overflow-hidden rounded-2xl border border-white/10">
-        <table className="w-full table-auto border-collapse bg-[#111827] text-left text-sm text-slate-300">
+      <div className="my-3 max-w-full overflow-x-auto rounded-2xl border border-white/10">
+        <table className="w-full min-w-[34rem] table-auto border-collapse bg-[#111827] text-left text-sm text-slate-300">
           {children}
         </table>
       </div>
     ),
     th: ({ children }) => (
-      <th className="break-words border-b border-white/10 bg-white/[0.04] px-3 py-2 font-semibold text-slate-100">
+      <th className="break-words border-b border-white/10 bg-white/[0.04] px-3 py-2.5 font-bold text-slate-100">
         {children}
       </th>
     ),
     td: ({ children }) => (
-      <td className="break-words border-b border-white/10 px-3 py-2 align-top">
+      <td className="break-words border-b border-white/10 px-3 py-2.5 align-top">
         {children}
       </td>
     ),
@@ -916,12 +969,12 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
 
 function TypingIndicator() {
   return (
-    <div className="message-enter flex min-w-0 gap-3">
-      <div className="assistant-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 sm:h-10 sm:w-10">
-        <Bot className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />
+    <div className="message-enter flex min-w-0 items-end gap-3">
+      <div className="assistant-avatar hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 sm:flex">
+        <Bot className="h-5 w-5" aria-hidden="true" />
       </div>
-      <div className="rounded-3xl rounded-tl-md border border-white/10 bg-white/[0.05] px-4 py-3">
-        <div className="flex items-center gap-3 text-sm text-slate-400">
+      <div className="px-1 py-2 sm:rounded-[1.35rem] sm:rounded-bl-md sm:border sm:border-white/10 sm:bg-[#111827]/90 sm:px-4 sm:py-3">
+        <div className="flex items-center gap-3 text-base text-slate-400 sm:text-sm">
           <span className="flex gap-1.5" aria-hidden="true">
             <span className="typing-dot" />
             <span className="typing-dot [animation-delay:120ms]" />
@@ -936,13 +989,13 @@ function TypingIndicator() {
 
 function ErrorMessage({ message }: { message: string }) {
   return (
-    <div className="message-enter flex min-w-0 gap-3" role="alert">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-red-500/[0.12] text-red-200 sm:h-10 sm:w-10">
+    <div className="message-enter flex min-w-0 items-end gap-3" role="alert">
+      <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-red-500/[0.12] text-red-200 sm:flex">
         <AlertCircle className="h-5 w-5" aria-hidden="true" />
       </div>
-      <div className="min-w-0 max-w-[min(42rem,calc(100%-3.25rem))] rounded-3xl rounded-tl-md border border-red-300/20 bg-red-500/10 px-4 py-3 text-red-100 sm:px-5">
-        <p className="text-sm font-semibold">Something went wrong</p>
-        <p className="mt-1 text-sm leading-6 text-red-200/80 [overflow-wrap:anywhere]">
+      <div className="min-w-0 max-w-full rounded-[1.35rem] border border-red-300/20 bg-red-500/10 px-3.5 py-3 text-red-100 sm:max-w-[min(42rem,78%)] sm:rounded-bl-md sm:px-5">
+        <p className="text-base font-bold sm:text-sm">Something went wrong</p>
+        <p className="mt-1 text-base leading-7 text-red-200/80 [overflow-wrap:anywhere] sm:text-sm sm:leading-6">
           {message}
         </p>
       </div>
