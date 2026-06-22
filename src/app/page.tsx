@@ -1,20 +1,26 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { ComponentProps, CSSProperties } from "react";
+import Image from "next/image";
+import type { CSSProperties } from "react";
+import type { Components } from "react-markdown";
 import {
-  Send,
+  AlertCircle,
+  ArrowDown,
   Bot,
-  User,
   Brain,
-  Loader2,
-  Trash2,
-  Sparkles,
-  Copy,
   Check,
-  Plus,
-  MessageSquare,
   Clock3,
+  Copy,
+  Loader2,
+  Menu,
+  MessageSquare,
+  Plus,
+  Send,
+  Sparkles,
+  Trash2,
+  User,
+  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -24,6 +30,7 @@ import remarkGfm from "remark-gfm";
 const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
 const USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
 const CURRENT_SESSION_KEY = "learning-brain-current-session";
+const MAX_COMPOSER_HEIGHT = 164;
 
 interface Message {
   id: string;
@@ -46,11 +53,6 @@ interface ApiChatMessage {
   created_at: string;
 }
 
-type MarkdownCodeProps = ComponentProps<"code"> & {
-  inline?: boolean;
-  node?: unknown;
-};
-
 function toChatMessages(apiMessages: ApiChatMessage[]): Message[] {
   return apiMessages.map((message) => ({
     id: message.id,
@@ -58,6 +60,13 @@ function toChatMessages(apiMessages: ApiChatMessage[]): Message[] {
     role: message.role,
     timestamp: new Date(message.created_at),
   }));
+}
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 export default function Home() {
@@ -68,16 +77,43 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const hasLoadedStoredSession = useRef(false);
 
-  // Auto-scroll to bottom when messages change
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ block: "end", behavior });
+  }, []);
+
+  const updateBottomState = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    setIsAtBottom(distanceFromBottom < 120);
+  }, []);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (messages.length === 0 && !isLoading) return;
+
+    scrollToBottom(prefersReducedMotion() ? "auto" : "smooth");
+  }, [messages.length, isLoading, scrollToBottom]);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(
+      textarea.scrollHeight,
+      MAX_COMPOSER_HEIGHT
+    )}px`;
+  }, [input]);
 
   const loadSessions = useCallback(async () => {
     setIsLoadingSessions(true);
@@ -116,8 +152,9 @@ export default function Home() {
 
       setCurrentSessionId(data.session.id);
       setMessages(toChatMessages(data.messages ?? []));
+      setIsSidebarOpen(false);
       window.sessionStorage.setItem(CURRENT_SESSION_KEY, data.session.id);
-      inputRef.current?.focus();
+      requestAnimationFrame(() => inputRef.current?.focus());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load session");
     } finally {
@@ -139,13 +176,13 @@ export default function Home() {
     }
   }, [loadSession]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  const submitMessage = async () => {
+    const trimmedInput = input.trim();
+    if (!trimmedInput || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: input.trim(),
+      content: trimmedInput,
       role: "user",
       timestamp: new Date(),
     };
@@ -202,18 +239,30 @@ export default function Home() {
       void loadSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
-      console.error("Error sending message:", err);
+      console.warn("Error sending message:", err);
     } finally {
       setIsLoading(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
     }
+  };
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void submitMessage();
   };
 
   const startNewChat = () => {
     setMessages([]);
     setCurrentSessionId(null);
     setError(null);
+    setIsSidebarOpen(false);
     window.sessionStorage.removeItem(CURRENT_SESSION_KEY);
-    inputRef.current?.focus();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const applyPrompt = (prompt: string) => {
+    setInput(prompt);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const deleteSession = async (sessionId: string) => {
@@ -267,415 +316,640 @@ export default function Home() {
     });
   };
 
+  const canSend = input.trim().length > 0 && !isLoading;
+  const activeSessionTitle =
+    sessions.find((session) => session.id === currentSessionId)?.title ??
+    "Fresh thread";
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Header */}
-      <header className="bg-slate-800/90 backdrop-blur-md border-b border-slate-700/50 shadow-xl sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3 sm:space-x-4">
-              <div className="relative group">
-                <div className="p-2.5 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg transform group-hover:scale-105 transition-transform duration-200">
-                  <Brain className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
-                </div>
-                <div className="absolute -inset-1 bg-blue-400/20 rounded-xl blur-sm group-hover:blur-md transition-all duration-300"></div>
-              </div>
-              <div>
-                <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-blue-200 to-blue-400 bg-clip-text text-transparent">
-                  Learning Brain
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-300 hidden sm:flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  AI-powered knowledge assistant
-                </p>
-              </div>
-            </div>
+    <div className="app-stage h-[100dvh] overflow-hidden text-[#f7faff]">
+      <div className="grid h-full min-w-0 grid-cols-1 overflow-hidden lg:grid-cols-[19rem_minmax(0,1fr)]">
+        <aside className="sidebar-panel hidden min-h-0 min-w-0 flex-col border-r border-white/10 lg:flex">
+          <SessionNavigation
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            isLoadingSessions={isLoadingSessions}
+            isLoadingSession={isLoadingSession}
+            onNewChat={startNewChat}
+            onLoadSession={loadSession}
+            onDeleteSession={deleteSession}
+            formatSessionTime={formatSessionTime}
+          />
+        </aside>
 
-            <div className="flex items-center space-x-2">
-              {messages.length > 0 && (
-                <div className="hidden sm:block text-sm text-slate-400 bg-slate-700/50 px-3 py-1 rounded-lg">
-                  {messages.length} message{messages.length !== 1 ? "s" : ""}
-                </div>
-              )}
-              <button
-                onClick={startNewChat}
-                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-xl transition-all duration-200 border border-slate-600/50 hover:border-blue-500/30 backdrop-blur-sm group"
-              >
-                <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
-                <span className="hidden sm:inline">New Chat</span>
-              </button>
-            </div>
+        {isSidebarOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden" role="presentation">
+            <button
+              type="button"
+              aria-label="Close navigation"
+              className="absolute inset-0 bg-black/[0.58]"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+            <aside className="sidebar-panel relative z-10 flex h-full w-[min(22rem,86vw)] flex-col border-r border-white/10 shadow-[28px_0_80px_rgba(0,0,0,0.42)]">
+              <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
+                <span className="text-sm font-semibold text-white">Menu</span>
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarOpen(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+                  aria-label="Close menu"
+                >
+                  <X className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </div>
+              <SessionNavigation
+                sessions={sessions}
+                currentSessionId={currentSessionId}
+                isLoadingSessions={isLoadingSessions}
+                isLoadingSession={isLoadingSession}
+                onNewChat={startNewChat}
+                onLoadSession={loadSession}
+                onDeleteSession={deleteSession}
+                formatSessionTime={formatSessionTime}
+              />
+            </aside>
           </div>
-        </div>
-      </header>
+        )}
 
-      {/* Main Chat Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 h-[calc(100vh-80px)] py-4">
-        <div className="grid h-full grid-rows-[auto_minmax(0,1fr)] gap-4 lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-1">
-          <aside className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl flex flex-col overflow-hidden max-h-56 lg:max-h-none">
-            <div className="border-b border-slate-700/30 p-3 sm:p-4 flex items-center justify-between gap-3">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pb-3 pt-3 sm:px-5 sm:pb-5 lg:px-6 lg:py-6">
+          <header className="nav-shell mb-3 flex h-14 shrink-0 items-center justify-between gap-3 rounded-2xl border border-white/10 px-3 shadow-[0_18px_60px_rgba(0,0,0,0.22)] sm:h-16 sm:px-4 lg:mb-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsSidebarOpen(true)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white lg:hidden"
+                aria-label="Open menu"
+              >
+                <Menu className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <div className="brand-mark hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 sm:flex lg:hidden">
+                <Brain className="h-5 w-5" aria-hidden="true" />
+              </div>
               <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                  <Clock3 className="w-4 h-4 text-blue-400" />
-                  Sessions
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  {sessions.length} saved
+                <h1 className="truncate text-sm font-semibold text-white sm:text-base">
+                  {activeSessionTitle}
+                </h1>
+                <p className="mt-0.5 truncate text-xs text-slate-400 sm:text-sm">
+                  {messages.length > 0
+                    ? `${messages.length} message${messages.length !== 1 ? "s" : ""}`
+                    : "Learning Brain"}
                 </p>
               </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={startNewChat}
-                title="Start new chat"
-                className="shrink-0 p-2 text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-lg transition-all border border-slate-600/40"
+                className="nav-action inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-white shadow-[0_12px_38px_rgba(37,99,235,0.28)] transition active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">New chat</span>
               </button>
             </div>
+          </header>
 
-            <div className="messages-container flex-1 overflow-y-auto p-2 space-y-1">
-              {isLoadingSessions ? (
-                <div className="flex items-center gap-2 px-3 py-3 text-sm text-slate-400">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Loading sessions
-                </div>
-              ) : sessions.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-slate-400">
-                  No saved sessions yet.
-                </div>
-              ) : (
-                sessions.map((session) => {
-                  const isActive = session.id === currentSessionId;
-
-                  return (
-                    <div
-                      key={session.id}
-                      className={`group flex items-stretch rounded-xl border transition-all ${
-                        isActive
-                          ? "bg-blue-500/15 border-blue-500/40"
-                          : "bg-slate-900/20 border-transparent hover:bg-slate-700/30 hover:border-slate-600/30"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void loadSession(session.id)}
-                        disabled={isLoadingSession}
-                        className="min-w-0 flex-1 px-3 py-2 text-left disabled:cursor-wait"
-                      >
-                        <span className="flex items-center gap-2 text-sm text-slate-100">
-                          <MessageSquare className="w-4 h-4 shrink-0 text-blue-300" />
-                          <span className="truncate">{session.title}</span>
-                        </span>
-                        <span className="mt-1 block text-xs text-slate-400">
-                          {formatSessionTime(session.updated_at)}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void deleteSession(session.id)}
-                        title="Delete session"
-                        className="shrink-0 px-2 text-slate-500 hover:text-red-300 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </aside>
-
-          <div className="bg-slate-800/40 backdrop-blur-xl rounded-2xl border border-slate-700/30 shadow-2xl h-full flex flex-col overflow-hidden min-h-0">
-            {/* Messages Container */}
+          <section className="chat-shell relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-white/10 shadow-[0_24px_90px_rgba(0,0,0,0.28)]">
             <div
               ref={messagesContainerRef}
-              className="messages-container flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-gradient-to-b from-slate-800/20 to-slate-900/10"
+              onScroll={updateBottomState}
+              className="messages-container chat-scroll flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
+              aria-live="polite"
             >
-            {messages.length === 0 ? (
-              <div className="text-center py-8 sm:py-16 h-full flex flex-col justify-center">
-                <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 sm:mb-6 bg-gradient-to-br from-blue-500/20 to-blue-600/20 rounded-2xl flex items-center justify-center shadow-lg">
-                  <Brain className="w-8 h-8 sm:w-10 sm:h-10 text-blue-400" />
+              {messages.length === 0 ? (
+                <EmptyState onSelectPrompt={applyPrompt} />
+              ) : (
+                <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+                  {messages.map((message) => (
+                    <ChatMessage
+                      key={message.id}
+                      message={message}
+                      formatTime={formatTime}
+                    />
+                  ))}
                 </div>
-                <h2 className="text-xl sm:text-2xl font-semibold text-white mb-3">
-                  Welcome to Learning Brain
-                </h2>
-                <p className="text-slate-300 max-w-md mx-auto mb-6 sm:mb-8 text-sm sm:text-base leading-relaxed">
-                  Start a conversation by sharing knowledge or asking questions.
-                </p>
-                <div className="mt-6 space-y-3 max-w-sm mx-auto">
-                  <div
-                    className="text-left p-4 bg-slate-700/30 border border-slate-600/30 rounded-xl backdrop-blur-sm hover:border-blue-500/20 transition-all duration-300 group cursor-pointer"
-                    onClick={() =>
-                      setInput(
-                        "Review this code: function add(a,b) { return a+b }"
-                      )
-                    }
-                  >
-                    <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
-                      <strong className="text-blue-400">Code:</strong>{" "}
-                      &quot;Review this code: function add...&quot;
-                    </p>
-                  </div>
-                  <div
-                    className="text-left p-4 bg-slate-700/30 border border-slate-600/30 rounded-xl backdrop-blur-sm hover:border-blue-500/20 transition-all duration-300 group cursor-pointer"
-                    onClick={() =>
-                      setInput("What do you know about energy conversion?")
-                    }
-                  >
-                    <p className="text-sm text-slate-300 leading-relaxed group-hover:text-slate-200">
-                      <strong className="text-blue-400">Ask:</strong>{" "}
-                      &quot;What do you know about energy conversion?&quot;
-                    </p>
-                  </div>
+              )}
+
+              {isLoading && (
+                <div className="mx-auto mt-5 w-full max-w-4xl">
+                  <TypingIndicator />
                 </div>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex gap-3 ${
-                      message.role === "user" ? "flex-row-reverse" : "flex-row"
-                    }`}
-                  >
-                    {/* Avatar */}
-                    <div
-                      className={`shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-lg ${
-                        message.role === "user"
-                          ? "bg-gradient-to-br from-blue-500 to-blue-600"
-                          : "bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600/50"
-                      }`}
-                    >
-                      {message.role === "user" ? (
-                        <User className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                      ) : (
-                        <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                      )}
-                    </div>
+              )}
 
-                    {/* Message Bubble - WIDTH INCREASED FOR CODE */}
-                    <div
-                      className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-4 py-3 shadow-lg backdrop-blur-sm overflow-hidden ${
-                        message.role === "user"
-                          ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white"
-                          : "bg-slate-700/60 text-slate-100 border border-slate-600/30"
-                      }`}
-                    >
-                      {/* NEW: Markdown Renderer */}
-                      <div className="text-sm sm:text-[15px] leading-relaxed">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            // Custom Code Block Renderer
-                            code({
-                              node,
-                              inline,
-                              className,
-                              children,
-                              ...props
-                            }: MarkdownCodeProps) {
-                              void node;
-                              const match = /language-(\w+)/.exec(
-                                className || ""
-                              );
-                              const codeString = String(children).replace(
-                                /\n$/,
-                                ""
-                              );
-
-                              if (!inline && match) {
-                                return (
-                                  <div className="relative my-4 rounded-lg overflow-hidden border border-slate-600/50 bg-[#1e1e1e]">
-                                    <div className="flex items-center justify-between px-3 py-2 bg-[#2d2d2d] border-b border-slate-600/50">
-                                      <span className="text-xs text-slate-400 font-mono">
-                                        {match[1]}
-                                      </span>
-                                      <CopyButton code={codeString} />
-                                    </div>
-                                    <SyntaxHighlighter
-                                      style={syntaxHighlighterStyle}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="!my-0 !bg-[#1e1e1e] !p-4 scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-transparent"
-                                      showLineNumbers={true}
-                                      wrapLines={true}
-                                    >
-                                      {codeString}
-                                    </SyntaxHighlighter>
-                                  </div>
-                                );
-                              }
-                              // Inline Code (e.g. `variable`)
-                              return (
-                                <code
-                                  className={`${
-                                    message.role === "user"
-                                      ? "bg-blue-700 text-white"
-                                      : "bg-slate-800 text-blue-200"
-                                  } px-1.5 py-0.5 rounded font-mono text-sm`}
-                                  {...props}
-                                >
-                                  {children}
-                                </code>
-                              );
-                            },
-                            // Paragraph styling
-                            p: ({ children }) => (
-                              <p className="mb-2 last:mb-0">{children}</p>
-                            ),
-                            // List styling
-                            ul: ({ children }) => (
-                              <ul className="list-disc ml-4 mb-2 space-y-1">
-                                {children}
-                              </ul>
-                            ),
-                            ol: ({ children }) => (
-                              <ol className="list-decimal ml-4 mb-2 space-y-1">
-                                {children}
-                              </ol>
-                            ),
-                            li: ({ children }) => (
-                              <li className="mb-0.5">{children}</li>
-                            ),
-                            // Link styling
-                            a: ({ href, children }) => (
-                              <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-300 hover:underline"
-                              >
-                                {children}
-                              </a>
-                            ),
-                          }}
-                        >
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
-
-                      {/* Timestamp */}
-                      <div
-                        className={`text-xs mt-2 font-medium flex items-center gap-2 ${
-                          message.role === "user"
-                            ? "text-blue-200/80"
-                            : "text-slate-400"
-                        }`}
-                      >
-                        <span>{formatTime(message.timestamp)}</span>
-                        {message.role === "assistant" && (
-                          <span className="flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" />
-                            AI
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Loading Indicator */}
-            {isLoading && (
-              <div className="flex gap-3">
-                <div className="shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 border border-slate-600/50 flex items-center justify-center shadow-lg">
-                  <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+              {error && (
+                <div className="mx-auto mt-5 w-full max-w-4xl">
+                  <ErrorMessage message={error} />
                 </div>
-                <div className="bg-slate-700/60 text-slate-100 rounded-2xl px-4 py-3 border border-slate-600/30 shadow-lg backdrop-blur-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
-                      <div
-                        className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      ></div>
-                      <div
-                        className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      ></div>
-                    </div>
-                    <span className="text-sm text-slate-300">Thinking...</span>
-                  </div>
-                </div>
-              </div>
-            )}
+              )}
 
-            {/* Error Message */}
-            {error && (
-              <div className="flex gap-3">
-                <div className="shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shadow-lg">
-                  <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                </div>
-                <div className="bg-red-900/30 text-red-300 rounded-2xl px-4 py-3 border border-red-700/50 shadow-lg backdrop-blur-sm max-w-[85%] sm:max-w-[75%]">
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm font-medium">
-                        Something went wrong
-                      </p>
-                      <p className="text-xs mt-1 opacity-90">{error}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+              <div ref={messagesEndRef} className="h-1" />
+            </div>
 
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input Form */}
-          <div className="border-t border-slate-700/30 p-4 sm:p-6 bg-slate-800/40 backdrop-blur-md">
-            <form onSubmit={handleSubmit} className="flex gap-3 sm:gap-4">
-              <div className="flex-1 relative">
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Share knowledge or ask a question..."
-                  className="w-full px-4 py-3 sm:px-5 sm:py-4 bg-slate-700/50 border border-slate-600/30 text-white placeholder-slate-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/30 transition-all duration-300 backdrop-blur-sm shadow-lg text-sm sm:text-base"
-                  disabled={isLoading}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit(e);
-                    }
-                  }}
-                />
-                {!input && (
-                  <div className="absolute inset-y-0 right-3 flex items-center">
-                    <span className="text-xs text-slate-500 bg-slate-600/30 px-2 py-1 rounded-lg hidden sm:block">
-                      Press Enter to send
-                    </span>
-                  </div>
-                )}
-              </div>
+            {!isAtBottom && messages.length > 0 && (
               <button
-                type="submit"
-                disabled={!input.trim() || isLoading}
-                className="px-4 py-3 sm:px-6 sm:py-4 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl hover:from-blue-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 flex items-center gap-2 font-medium shadow-lg hover:shadow-blue-500/20 disabled:hover:shadow-none group min-w-[80px] sm:min-w-[100px] justify-center"
+                type="button"
+                onClick={() =>
+                  scrollToBottom(prefersReducedMotion() ? "auto" : "smooth")
+                }
+                className="absolute bottom-28 left-1/2 z-10 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-[#121a2b]/95 px-3 text-sm font-medium text-blue-100 shadow-[0_16px_48px_rgba(0,0,0,0.32)] transition hover:border-blue-400/40 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 sm:bottom-32"
               >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4 sm:w-5 sm:h-5 group-hover:translate-x-0.5 transition-transform" />
-                )}
-                <span className="hidden sm:inline">Send</span>
+                <ArrowDown className="h-4 w-4" aria-hidden="true" />
+                Bottom
               </button>
-            </form>
-            <p className="text-xs text-slate-500 mt-3 text-center flex items-center justify-center gap-2">
-              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse"></span>
-              Your knowledge is stored securely and improves responses over time
-            </p>
-          </div>
-        </div>
-        </div>
-      </main>
+            )}
+
+            <div className="composer-zone shrink-0 border-t border-white/10 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-3 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
+              <form
+                onSubmit={handleSubmit}
+                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-2 rounded-2xl border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:gap-2"
+              >
+                <div className="relative min-w-0 flex-1">
+                  <label htmlFor="chat-input" className="sr-only">
+                    Message
+                  </label>
+                  <textarea
+                    id="chat-input"
+                    ref={inputRef}
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                    placeholder="Share a thought, question, or code snippet..."
+                    rows={1}
+                    disabled={isLoading}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void submitMessage();
+                      }
+                    }}
+                    className="max-h-[164px] min-h-[46px] w-full resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2.5 pr-4 text-[16px] leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={!canSend}
+                  aria-label={isLoading ? "Sending message" : "Send message"}
+                  className="send-button flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Send className="h-5 w-5" aria-hidden="true" />
+                  )}
+                </button>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
   );
 }
 
-// Helper Component for the Copy Button
+function SessionNavigation({
+  sessions,
+  currentSessionId,
+  isLoadingSessions,
+  isLoadingSession,
+  onNewChat,
+  onLoadSession,
+  onDeleteSession,
+  formatSessionTime,
+}: {
+  sessions: ChatSession[];
+  currentSessionId: string | null;
+  isLoadingSessions: boolean;
+  isLoadingSession: boolean;
+  onNewChat: () => void;
+  onLoadSession: (sessionId: string) => Promise<void>;
+  onDeleteSession: (sessionId: string) => Promise<void>;
+  formatSessionTime: (value: string) => string;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-white/10 p-4">
+        <div className="flex items-center gap-3">
+          <div className="brand-mark flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 shadow-[0_14px_44px_rgba(37,99,235,0.18)]">
+            <Brain className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-base font-semibold text-white">
+              Learning Brain
+            </p>
+            <p className="mt-0.5 truncate text-xs text-slate-400">
+              Personal memory assistant
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="nav-action mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold text-white shadow-[0_14px_42px_rgba(37,99,235,0.24)] transition active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          New chat
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+          <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+          Recent
+        </h2>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-400">
+          {sessions.length}
+        </span>
+      </div>
+
+      <div className="messages-container flex-1 space-y-1 overflow-y-auto px-2 pb-3">
+        {isLoadingSessions ? (
+          <SessionLoading />
+        ) : sessions.length === 0 ? (
+          <div className="mx-2 rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.03] px-3 py-4 text-sm leading-6 text-slate-400">
+            No saved sessions yet. Start a chat and it will appear here.
+          </div>
+        ) : (
+          sessions.map((session) => {
+            const isActive = session.id === currentSessionId;
+
+            return (
+              <div
+                key={session.id}
+                className={`group flex min-w-0 items-stretch rounded-2xl border transition ${
+                  isActive
+                    ? "border-blue-400/[0.35] bg-blue-500/[0.12]"
+                    : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => void onLoadSession(session.id)}
+                  disabled={isLoadingSession}
+                  className="min-w-0 flex-1 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-300"
+                >
+                  <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-100">
+                    <MessageSquare
+                      className={`h-4 w-4 shrink-0 ${
+                        isActive ? "text-blue-300" : "text-slate-500"
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span className="truncate">{session.title}</span>
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    {formatSessionTime(session.updated_at)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDeleteSession(session.id)}
+                  title="Delete session"
+                  className="flex w-10 shrink-0 items-center justify-center text-slate-600 opacity-100 transition hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-300 sm:opacity-0 sm:group-hover:opacity-100"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="border-t border-white/10 p-3">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
+            <Sparkles className="h-4 w-4 text-blue-300" aria-hidden="true" />
+            Memory ready
+          </div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Ask, save, or review code from one focused workspace.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({
+  onSelectPrompt,
+}: {
+  onSelectPrompt: (prompt: string) => void;
+}) {
+  const prompts = [
+    {
+      label: "Remember a learning pattern",
+      eyebrow: "Memory",
+      prompt: "Remember: spaced repetition helps me retain new concepts.",
+      icon: Brain,
+    },
+    {
+      label: "Ask about energy conversion",
+      eyebrow: "Question",
+      prompt: "What do you know about energy conversion?",
+      icon: MessageSquare,
+    },
+    {
+      label: "Review a short code snippet",
+      eyebrow: "Code",
+      prompt: "Review this code: function add(a, b) { return a + b; }",
+      icon: Sparkles,
+    },
+  ];
+
+  return (
+    <div className="mx-auto grid min-h-full w-full max-w-5xl items-center gap-7 px-1 py-3 sm:px-3 sm:py-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
+      <div className="message-enter order-2 max-w-2xl lg:order-1">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-200">
+          <Sparkles className="h-3.5 w-3.5 text-blue-300" aria-hidden="true" />
+          Your learning space is ready
+        </div>
+        <h2 className="text-3xl font-semibold leading-tight tracking-normal text-white sm:text-5xl">
+          Learn, remember, and ask with less friction.
+        </h2>
+        <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">
+          Capture notes, ask from memory, or drop in code for a focused review.
+        </p>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+          {prompts.map((item) => (
+            <PromptCard key={item.label} item={item} onSelect={onSelectPrompt} />
+          ))}
+        </div>
+      </div>
+
+      <div className="message-enter order-1 mx-auto w-full max-w-[18rem] lg:order-2 lg:max-w-none">
+        <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[#090d18] shadow-[0_28px_90px_rgba(37,99,235,0.18)]">
+          <Image
+            src="/generated/ai-companion.png"
+            alt=""
+            width={680}
+            height={680}
+            priority
+            className="aspect-square h-auto w-full"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PromptCard({
+  item,
+  onSelect,
+}: {
+  item: {
+    label: string;
+    eyebrow: string;
+    prompt: string;
+    icon: typeof Brain;
+  };
+  onSelect: (prompt: string) => void;
+}) {
+  const Icon = item.icon;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(item.prompt)}
+      className="prompt-card message-enter group min-w-0 rounded-2xl border border-white/10 p-3.5 text-left transition hover:border-blue-400/[0.35] hover:bg-white/[0.06] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+    >
+      <span className="mb-4 flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/[0.12] text-blue-200 transition group-hover:bg-blue-500/[0.18]">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <span className="block text-xs font-medium text-blue-300">
+        {item.eyebrow}
+      </span>
+      <span className="mt-1.5 block text-sm font-semibold leading-5 text-slate-100">
+        {item.label}
+      </span>
+    </button>
+  );
+}
+
+function SessionLoading() {
+  return (
+    <div className="space-y-2 px-2 py-1" aria-label="Loading sessions">
+      {[0, 1, 2].map((item) => (
+        <div
+          key={item}
+          className="h-[64px] animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]"
+        />
+      ))}
+    </div>
+  );
+}
+
+function ChatMessage({
+  message,
+  formatTime,
+}: {
+  message: Message;
+  formatTime: (date: Date) => string;
+}) {
+  const isUser = message.role === "user";
+
+  return (
+    <article
+      className={`message-enter flex min-w-0 gap-3 ${
+        isUser ? "flex-row-reverse" : "flex-row"
+      }`}
+    >
+      <div
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl sm:h-10 sm:w-10 ${
+          isUser
+            ? "bg-blue-600 text-white shadow-[0_14px_40px_rgba(37,99,235,0.28)]"
+            : "assistant-avatar border border-blue-300/20 text-blue-100"
+        }`}
+        aria-hidden="true"
+      >
+        {isUser ? (
+          <User className="h-4 w-4 sm:h-5 sm:w-5" />
+        ) : (
+          <Bot className="h-4 w-4 sm:h-5 sm:w-5" />
+        )}
+      </div>
+
+      <div
+        className={`min-w-0 max-w-[min(43rem,calc(100%-3.25rem))] rounded-3xl px-4 py-3 sm:px-5 ${
+          isUser
+            ? "rounded-tr-md bg-blue-600 text-white shadow-[0_18px_52px_rgba(37,99,235,0.18)]"
+            : "rounded-tl-md border border-white/10 bg-white/[0.05] text-slate-100"
+        }`}
+      >
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={createMarkdownComponents(isUser)}
+        >
+          {message.content}
+        </ReactMarkdown>
+
+        <div
+          className={`mt-3 flex items-center gap-2 text-xs font-medium ${
+            isUser ? "text-white/70" : "text-slate-500"
+          }`}
+        >
+          <span>{formatTime(message.timestamp)}</span>
+          {!isUser && (
+            <span className="flex items-center gap-1">
+              <Sparkles className="h-3 w-3" aria-hidden="true" />
+              AI
+            </span>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function createMarkdownComponents(isUser: boolean): Components {
+  return {
+    pre: ({ children }) => <>{children}</>,
+    code: ({ className, children }) => {
+      const match = /language-(\w+)/.exec(className || "");
+      const codeString = String(children).replace(/\n$/, "");
+      const language = match?.[1] ?? "text";
+      const isBlock = Boolean(match) || codeString.includes("\n");
+
+      if (isBlock) {
+        return <CodeBlock code={codeString} language={language} />;
+      }
+
+      return (
+        <code
+          className={`rounded-md px-1.5 py-0.5 font-mono text-[0.9em] ${
+            isUser
+              ? "bg-white/[0.15] text-white"
+              : "bg-white/[0.08] text-blue-100"
+          }`}
+        >
+          {children}
+        </code>
+      );
+    },
+    p: ({ children }) => (
+      <p className="chat-markdown mb-2 text-[15px] leading-7 last:mb-0">
+        {children}
+      </p>
+    ),
+    ul: ({ children }) => (
+      <ul className="chat-markdown mb-2 ml-5 list-disc space-y-1 text-[15px] leading-7">
+        {children}
+      </ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="chat-markdown mb-2 ml-5 list-decimal space-y-1 text-[15px] leading-7">
+        {children}
+      </ol>
+    ),
+    li: ({ children }) => <li className="pl-1">{children}</li>,
+    blockquote: ({ children }) => (
+      <blockquote
+        className={`chat-markdown my-3 border-l-2 pl-3 text-[15px] leading-7 ${
+          isUser
+            ? "border-white/[0.35] text-white/[0.85]"
+            : "border-blue-300/[0.35] text-slate-300"
+        }`}
+      >
+        {children}
+      </blockquote>
+    ),
+    a: ({ href, children }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`underline decoration-2 underline-offset-2 transition ${
+          isUser
+            ? "text-white decoration-white/[0.35] hover:decoration-white"
+            : "text-blue-300 decoration-blue-300/25 hover:decoration-blue-300"
+        }`}
+      >
+        {children}
+      </a>
+    ),
+    table: ({ children }) => (
+      <div className="my-3 max-w-full overflow-hidden rounded-2xl border border-white/10">
+        <table className="w-full table-auto border-collapse bg-[#111827] text-left text-sm text-slate-300">
+          {children}
+        </table>
+      </div>
+    ),
+    th: ({ children }) => (
+      <th className="break-words border-b border-white/10 bg-white/[0.04] px-3 py-2 font-semibold text-slate-100">
+        {children}
+      </th>
+    ),
+    td: ({ children }) => (
+      <td className="break-words border-b border-white/10 px-3 py-2 align-top">
+        {children}
+      </td>
+    ),
+  };
+}
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  return (
+    <div className="code-block my-4 max-w-full overflow-hidden rounded-lg border border-[#21352f] bg-[#08110f]">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[#101b18] px-3 py-2">
+        <span className="min-w-0 truncate font-mono text-xs text-stone-300">
+          {language}
+        </span>
+        <CopyButton code={code} />
+      </div>
+      <SyntaxHighlighter
+        style={syntaxHighlighterStyle}
+        language={language}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          background: "#08110f",
+          padding: "1rem",
+          maxWidth: "100%",
+        }}
+        wrapLines
+        wrapLongLines
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="message-enter flex min-w-0 gap-3">
+      <div className="assistant-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 sm:h-10 sm:w-10">
+        <Bot className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />
+      </div>
+      <div className="rounded-3xl rounded-tl-md border border-white/10 bg-white/[0.05] px-4 py-3">
+        <div className="flex items-center gap-3 text-sm text-slate-400">
+          <span className="flex gap-1.5" aria-hidden="true">
+            <span className="typing-dot" />
+            <span className="typing-dot [animation-delay:120ms]" />
+            <span className="typing-dot [animation-delay:240ms]" />
+          </span>
+          Thinking
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ErrorMessage({ message }: { message: string }) {
+  return (
+    <div className="message-enter flex min-w-0 gap-3" role="alert">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-red-500/[0.12] text-red-200 sm:h-10 sm:w-10">
+        <AlertCircle className="h-5 w-5" aria-hidden="true" />
+      </div>
+      <div className="min-w-0 max-w-[min(42rem,calc(100%-3.25rem))] rounded-3xl rounded-tl-md border border-red-300/20 bg-red-500/10 px-4 py-3 text-red-100 sm:px-5">
+        <p className="text-sm font-semibold">Something went wrong</p>
+        <p className="mt-1 text-sm leading-6 text-red-200/80 [overflow-wrap:anywhere]">
+          {message}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function CopyButton({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -685,25 +959,26 @@ function CopyButton({ code }: { code: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy!", err);
+      console.error("Failed to copy code", err);
     }
   };
 
   return (
     <button
+      type="button"
       onClick={copyToClipboard}
-      className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md transition-all flex items-center gap-1.5"
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-stone-300 transition hover:bg-white/10 hover:text-white active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
       title="Copy code"
     >
       {copied ? (
         <>
-          <Check className="w-3.5 h-3.5 text-green-400" />
-          <span className="text-xs text-green-400">Copied!</span>
+          <Check className="h-3.5 w-3.5 text-emerald-300" aria-hidden="true" />
+          <span className="hidden sm:inline">Copied</span>
         </>
       ) : (
         <>
-          <Copy className="w-3.5 h-3.5" />
-          <span className="text-xs">Copy</span>
+          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="hidden sm:inline">Copy</span>
         </>
       )}
     </button>

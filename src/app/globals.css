@@ -1,11 +1,120 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: dark;
+  --background: #070a12;
+  --surface: #0d1220;
+  --surface-elevated: #121a2b;
+  --surface-muted: #172033;
+  --border: rgba(148, 163, 184, 0.16);
+  --border-strong: rgba(125, 170, 255, 0.34);
+  --text: #f7faff;
+  --text-muted: #93a1b8;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --glow: rgba(37, 99, 235, 0.3);
+}
+
+html,
+body {
+  height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  background: var(--background);
+}
+
+body {
+  text-rendering: geometricPrecision;
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app-stage {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent 34rem),
+    radial-gradient(circle at 18% 12%, rgba(34, 211, 238, 0.12), transparent 28rem),
+    var(--background);
+}
+
+.nav-shell {
+  background: rgba(13, 18, 32, 0.88);
+  backdrop-filter: blur(18px);
+}
+
+.brand-mark {
+  background: linear-gradient(145deg, rgba(59, 130, 246, 0.28), rgba(34, 211, 238, 0.12));
+  color: #dceaff;
+}
+
+.nav-action {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.nav-action:hover {
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+}
+
+.icon-action {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar-panel {
+  background: rgba(9, 13, 24, 0.92);
+  backdrop-filter: blur(24px);
+}
+
+.chat-shell {
+  background: rgba(10, 15, 28, 0.74);
+  backdrop-filter: blur(22px);
+}
+
+.chat-scroll {
+  background:
+    radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.08), transparent 25rem),
+    rgba(7, 10, 18, 0.38);
+}
+
+.composer-zone {
+  background: rgba(10, 15, 28, 0.88);
+  backdrop-filter: blur(18px);
+}
+
+.composer-shell {
+  background: rgba(18, 26, 43, 0.92);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.composer-shell:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+.send-button:not(:disabled) {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.assistant-avatar {
+  background: var(--accent-soft);
+}
+
+.prompt-card {
+  background: rgba(18, 26, 43, 0.74);
+}
+
 .messages-container {
   scrollbar-width: thin;
-  scrollbar-color: #4b5563 transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+  overscroll-behavior: contain;
 }
 
 .messages-container::-webkit-scrollbar {
+  height: 8px;
   width: 8px;
 }
 
@@ -14,25 +123,84 @@
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-  background-color: #4b5563;
-  border-radius: 4px;
+  background-color: rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
 }
 
 .messages-container::-webkit-scrollbar-thumb:hover {
-  background-color: #6b7280;
+  background-color: rgba(148, 163, 184, 0.6);
 }
 
-/* Improve text readability */
-.prose {
-  color: inherit;
+.chat-markdown,
+.chat-markdown * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.prose p {
-  margin-top: 0;
-  margin-bottom: 0;
+.chat-markdown a {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
-/* Better line spacing for messages */
-.leading-relaxed {
-  line-height: 1.7;
+.code-block div,
+.code-block pre,
+.code-block code,
+.code-block span {
+  max-width: 100%;
+}
+
+.code-block pre,
+.code-block code {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+.message-enter {
+  animation: message-enter 160ms ease-out both;
+}
+
+.typing-dot {
+  display: inline-block;
+  height: 0.45rem;
+  width: 0.45rem;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: typing-bounce 900ms ease-in-out infinite;
+}
+
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes typing-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.42;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }
