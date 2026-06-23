@@ -1,36 +1,28 @@
 import { NextResponse } from "next/server";
 import { saveChatTurn } from "@/src/lib/chatSessions";
-import { supabase } from "@/src/lib/supabaseClient";
+import {
+  buildTeachModeResponse,
+  createGeneratedLearningMemory,
+  detectKnowledgeGap,
+  formatKnowledgeGapResponse,
+  generateWeeklyLearningSummary,
+  getSpaces,
+  saveMemoryWithIntelligence,
+  searchRelatedMemories,
+  type MemoryMatch,
+  type SaveMemoryWithIntelligenceResult,
+} from "@/src/lib/memoryIntelligence";
 import { generateSummary, generateWithWebSearch } from "@/src/lib/gemini";
-import { embedText } from "@/src/lib/embeddings";
+import {
+  isWeeklySummaryCommand,
+  parseKnowledgeTopic,
+  parseTeachTopic,
+  truncateTitle,
+} from "@/src/lib/memoryUtils";
 import { CODE_REVIEW_PROMPT } from "@/src/prompts/codeReviewer";
-
-interface MemoryMatch {
-  body: string;
-  title?: string;
-  id?: string;
-  [key: string]: unknown;
-}
-
-interface SaveGeneratedMemoryOptions {
-  userId: string;
-  title: string;
-  body: string;
-  memoryType: "note" | "question";
-}
-
-interface SaveUserMemoryOptions {
-  userId: string;
-  title: string;
-  body: string;
-  embedding?: number[] | null;
-}
+import { getPublicErrorMessage, isSchemaMissingError } from "@/src/lib/apiErrors";
 
 type BrainResponsePayload = Record<string, unknown>;
-
-function truncateTitle(title: string) {
-  return title.length > 60 ? title.slice(0, 57) + "..." : title;
-}
 
 function getErrorMessage(err: unknown) {
   if (err instanceof Error) return err.message;
@@ -108,96 +100,166 @@ async function createBrainResponse({
   }
 }
 
-async function saveGeneratedMemory({
-  userId,
-  title,
-  body,
-  memoryType,
-}: SaveGeneratedMemoryOptions) {
-  const embedding = await embedText(body);
-
-  const { data: memory, error: memoryError } = await supabase
-    .from("memories")
-    .insert([
-      {
-        user_id: userId,
-        title: truncateTitle(title),
-        body,
-        memory_type: memoryType,
-        source: "gemini",
-      },
-    ])
-    .select()
-    .single();
-
-  if (memoryError) throw memoryError;
-
-  const { error: vectorError } = await supabase
-    .from("memory_vectors")
-    .insert([{ memory_id: memory.id, embedding }]);
-
-  if (vectorError) throw vectorError;
+function isFallbackQuestion(inputText: string) {
+  const trimmedInput = inputText.trim().toLowerCase();
+  return (
+    trimmedInput.endsWith("?") ||
+    /^(what|who|when|where|why|how|which|can|could|would|should|is|are|do|does|did|will|tell me|explain|describe|show me)/i.test(
+      trimmedInput
+    )
+  );
 }
 
-async function trySaveGeneratedMemory(options: SaveGeneratedMemoryOptions) {
+async function classifyInput(inputText: string) {
+  const classificationPrompt = `Analyze the following user input and determine if it is:
+1. A QUESTION - the user is asking something, seeking information, or wants to know about something
+2. A STATEMENT - the user is providing information, stating facts, or sharing knowledge to be stored
+
+Examples of QUESTIONS:
+- "what is photosynthesis"
+- "tell me about dogs"
+- "do I know about RAG?"
+- "teach me from my brain: embeddings"
+
+Examples of STATEMENTS:
+- "my name is John"
+- "I learned that photosynthesis converts light to energy"
+- "RAG retrieves context before generation"
+
+User input: "${inputText}"
+
+Respond with ONLY one word: "question" or "statement".`;
+
   try {
-    await saveGeneratedMemory(options);
-    return { saved: true };
-  } catch (err: unknown) {
-    const error = getErrorMessage(err);
-    console.error("Generated answer was returned, but memory save failed:", {
-      error,
-      err,
-    });
-    return { saved: false, error };
+    const classification = (await generateSummary(classificationPrompt))
+      .trim()
+      .toLowerCase();
+    return classification.includes("question");
+  } catch (classificationError) {
+    console.error("Error classifying input:", classificationError);
+    return isFallbackQuestion(inputText);
   }
 }
 
-async function saveUserMemory({
-  userId,
-  title,
-  body,
-  embedding,
-}: SaveUserMemoryOptions) {
-  const memoryEmbedding = embedding ?? (await embedText(body));
-
-  const { data: memory, error: memoryError } = await supabase
-    .from("memories")
-    .insert([
-      {
-        user_id: userId,
-        title: truncateTitle(title),
-        body,
-        memory_type: "note",
-        source: "user",
-      },
-    ])
-    .select()
-    .single();
-
-  if (memoryError) throw memoryError;
-
-  const { error: vectorError } = await supabase
-    .from("memory_vectors")
-    .insert([{ memory_id: memory.id, embedding: memoryEmbedding }]);
-
-  if (vectorError) throw vectorError;
+function isVeryShortAcknowledgement(inputText: string, isQuestion: boolean) {
+  const trimmedInput = inputText.trim().toLowerCase();
+  return (
+    !isQuestion &&
+    (trimmedInput.length < 3 || /^(no|yes|ok|okay|sure|nope|yep)$/.test(trimmedInput))
+  );
 }
 
-async function trySaveUserMemory(options: SaveUserMemoryOptions) {
-  try {
-    await saveUserMemory(options);
-    return { saved: true };
-  } catch (err: unknown) {
-    const error = getErrorMessage(err);
-    console.error("User memory save failed:", { error, err });
-    return { saved: false, error };
+function answerWasNotInStoredInfo(answer: string) {
+  const answerLower = answer.toLowerCase().trim();
+  return (
+    answerLower.includes("not_in_stored_info") ||
+    answerLower.includes("don't have that information") ||
+    answerLower.includes("does not contain the answer") ||
+    answerLower.includes("not in your stored")
+  );
+}
+
+function extractQuestionTopic(inputText: string) {
+  const whatIsMatch = inputText.match(/\bwhat (?:is|are) (.+?)\??$/i);
+  if (whatIsMatch?.[1]) return whatIsMatch[1].trim();
+
+  const tellMeMatch = inputText.match(/\b(?:tell me about|explain|describe)\s+(.+?)\??$/i);
+  if (tellMeMatch?.[1]) return tellMeMatch[1].trim();
+
+  return truncateTitle(inputText, 48);
+}
+
+function createGeneratedMemoryBody(inputText: string, answer: string) {
+  const topic = extractQuestionTopic(inputText);
+  if (topic && topic.length < 80) {
+    return {
+      topic,
+      body: `AI-generated learning about ${topic}:\n\n${answer}`,
+    };
   }
+
+  return {
+    topic: truncateTitle(inputText, 48),
+    body: `Q: ${inputText}\nA: ${answer}`,
+  };
+}
+
+async function answerFromStoredMemories(inputText: string, matches: MemoryMatch[]) {
+  const context = matches
+    .map(
+      (memory, index) =>
+        `Memory ${index + 1}\nTitle: ${memory.title}\nTopic: ${
+          memory.topic ?? "unknown"
+        }\nTags: ${memory.tags.join(", ") || "none"}\nBody: ${memory.body}`
+    )
+    .join("\n\n");
+
+  const answerPrompt = `You are a helpful assistant with access to the user's personal knowledge base. Answer the question naturally based only on their stored memories.
+
+The user's stored knowledge:
+${context}
+
+Question: ${inputText}
+
+Instructions:
+- Answer based ONLY on the user's stored memories above.
+- If the memories do not contain the answer, respond with exactly: NOT_IN_STORED_INFO.
+- Distinguish saved user knowledge from your own general knowledge.
+- Be concise but useful.
+
+Answer:`;
+
+  return generateSummary(answerPrompt);
+}
+
+function buildSaveResponse(saveResult: SaveMemoryWithIntelligenceResult) {
+  if (!saveResult.memorySaved) {
+    return "I understood that, but I couldn't save it as a memory right now. Please try again in a moment.";
+  }
+
+  const issues = saveResult.relationTypes ?? [];
+
+  if (issues.includes("contradicts")) {
+    return "Saved. I also found a possible contradiction with an older memory, so I marked this for review.";
+  }
+
+  if (issues.includes("duplicate_of") || issues.includes("near_duplicate")) {
+    return "Saved. This looks close to something already in your brain, so I linked it and marked it for review.";
+  }
+
+  if (saveResult.needsReview) {
+    return "Saved. I marked it for review because it may need cleanup or confirmation.";
+  }
+
+  if (!saveResult.saved && saveResult.saveError) {
+    return "Saved the memory, but search indexing hit a problem. It may not show up in semantic recall until indexing succeeds.";
+  }
+
+  return "Saved. I tagged it, placed it in a space, and linked it to nearby ideas.";
+}
+
+function saveMetadata(saveResult: SaveMemoryWithIntelligenceResult) {
+  return {
+    saved: saveResult.memorySaved,
+    indexed: saveResult.saved,
+    memoryId: saveResult.memoryId,
+    spaceId: saveResult.spaceId,
+    spaceName: saveResult.spaceName,
+    topic: saveResult.topic,
+    tags: saveResult.tags,
+    confidenceScore: saveResult.confidenceScore,
+    confidenceStatus: saveResult.confidenceStatus,
+    needsReview: saveResult.needsReview,
+    relationTypes: saveResult.relationTypes,
+    relationsCreated: saveResult.relationsCreated,
+    relatedCount: saveResult.relatedCount,
+    saveError: saveResult.saveError,
+  };
 }
 
 export async function POST(req: Request) {
   try {
-    const { inputText, userId, sessionId } = await req.json();
+    const { inputText, userId, sessionId, spaceId } = await req.json();
 
     if (!inputText || !userId) {
       return NextResponse.json(
@@ -206,6 +268,7 @@ export async function POST(req: Request) {
       );
     }
 
+    const selectedSpaceId = typeof spaceId === "string" ? spaceId : null;
     const respond = (payload: BrainResponsePayload) =>
       createBrainResponse({
         payload,
@@ -216,7 +279,6 @@ export async function POST(req: Request) {
 
     const lower = inputText.toLowerCase();
     const containsCodeBlock = inputText.includes("```");
-
     const isCodeReview =
       lower.includes("review this code") ||
       lower.includes("code review") ||
@@ -224,8 +286,6 @@ export async function POST(req: Request) {
       containsCodeBlock;
 
     if (isCodeReview) {
-      console.log("CODE REVIEW MODE ACTIVATED");
-
       const reviewPrompt = `
 ${CODE_REVIEW_PROMPT}
 
@@ -233,7 +293,7 @@ USER PROVIDED CODE:
 ${inputText}
 
 Now perform the full code review based on the standards above.
-  `;
+`;
 
       const reviewResponse = await generateSummary(reviewPrompt);
 
@@ -241,66 +301,78 @@ Now perform the full code review based on the standards above.
         type: "code_review",
         response: reviewResponse,
         reviewed: true,
-        saved: false, // Do NOT save code to memory
+        saved: false,
       });
     }
 
-    // Step 1: Check for special "Do I know about X" pattern
-    const trimmedInput = inputText.trim().toLowerCase();
-    const isKnowledgeCheck =
-      /^(do i know|do you know|do i know about|do you know about|have i learned|have i learned about)/i.test(
-        trimmedInput
-      );
-
-    // Step 2: Use AI to classify if input is a question or a statement/info to store
-    const classificationPrompt = `Analyze the following user input and determine if it is:
-1. A QUESTION - The user is asking something, seeking information, or wants to know about something
-2. A STATEMENT - The user is providing information, stating facts, or sharing knowledge to be stored
-
-Examples of QUESTIONS:
-- "what's my name"
-- "color of the sea"
-- "what is photosynthesis"
-- "tell me about dogs"
-- "how does this work"
-
-Examples of STATEMENTS:
-- "my name is John"
-- "the color of the sea is blue"
-- "I learned that photosynthesis converts light to energy"
-- "dogs are loyal animals"
-
-User input: "${inputText}"
-
-Respond with ONLY one word: "question" or "statement".`;
-
-    let isQuestion = false;
     try {
-      const classification = (await generateSummary(classificationPrompt))
-        .trim()
-        .toLowerCase();
+      await getSpaces(userId);
+    } catch (setupError) {
+      if (isSchemaMissingError(setupError)) {
+        return respond({
+          type: "setup_required",
+          response:
+            "The app is running, but the new memory intelligence database migration has not been applied yet. Apply `supabase/migrations/20260623000000_memory_intelligence_layer.sql`, then refresh this page to use spaces, tagging, graph, review queue, teach mode, and weekly summaries.",
+          saved: false,
+          setupRequired: true,
+        });
+      }
 
-      isQuestion = classification.includes("question");
-      console.log(
-        `AI Classification: ${classification} -> isQuestion: ${isQuestion}`
-      );
-    } catch (classificationError) {
-      console.error("Error classifying input:", classificationError);
-      // Fallback to simple check if AI classification fails
-      isQuestion =
-        trimmedInput.endsWith("?") ||
-        /^(what|who|when|where|why|how|which|can|could|would|should|is|are|do|does|did|will|tell me|explain|describe|show me)/i.test(
-          trimmedInput
-        );
+      throw setupError;
     }
 
-    // Filter out very short responses that are likely not information to store
-    const isVeryShort =
-      trimmedInput.length < 3 ||
-      /^(no|yes|ok|okay|sure|nope|yep)$/i.test(trimmedInput);
+    if (isWeeklySummaryCommand(inputText)) {
+      const weekly = await generateWeeklyLearningSummary({
+        userId,
+        spaceId: selectedSpaceId,
+      });
 
-    // If it's very short and not a question, don't treat it as information to store
-    if (isVeryShort && !isQuestion) {
+      return respond({
+        type: "weekly_summary",
+        response: weekly.summary,
+        saved: true,
+        weekStart: weekly.weekStart,
+        memoryCount: weekly.memoryCount,
+        topTopics: weekly.topTopics,
+        weakTopics: weekly.weakTopics,
+        relationIssueCount: weekly.relationIssueCount,
+      });
+    }
+
+    const teachTopic = parseTeachTopic(inputText);
+    if (teachTopic) {
+      const teach = await buildTeachModeResponse({
+        userId,
+        topic: teachTopic,
+        spaceId: selectedSpaceId,
+      });
+      const generatedSave =
+        teach.memoryToSave && teach.knowledgeStatus !== "known"
+          ? await createGeneratedLearningMemory({
+              userId,
+              topic: teachTopic,
+              body: teach.memoryToSave,
+              spaceId: selectedSpaceId,
+            })
+          : null;
+
+      return respond({
+        type: "teach_mode",
+        response: teach.response,
+        knowledgeStatus: teach.knowledgeStatus,
+        knownPoints: teach.knownFromYourBrain,
+        missingPoints: teach.gaps,
+        saved: generatedSave?.memorySaved ?? false,
+        generatedMemoryId: generatedSave?.memoryId,
+        needsReview: generatedSave?.needsReview ?? false,
+        topic: teachTopic,
+        relatedCount: teach.relatedMemories.length,
+      });
+    }
+
+    const isQuestion = await classifyInput(inputText);
+
+    if (isVeryShortAcknowledgement(inputText, isQuestion)) {
       return respond({
         type: "note",
         response: "I understand. How can I help you?",
@@ -308,488 +380,111 @@ Respond with ONLY one word: "question" or "statement".`;
       });
     }
 
-    // Step 2: Always search existing memories first to find relevant context
-    let userMatches: MemoryMatch[] = [];
-    let queryEmbedding: number[] | null = null;
-
-    try {
-      queryEmbedding = await embedText(inputText);
-
-      const { data: matches, error: matchError } = await supabase.rpc(
-        "match_memories",
-        {
-          query_embedding: queryEmbedding,
-          match_threshold: 0.5, // Lower threshold to catch more relevant memories (was 0.6)
-          match_count: 10, // Get more matches for better context
-        }
-      );
-
-      if (matchError) {
-        console.error("Error matching memories:", matchError);
-      }
-
-      // Filter matches by user_id if RPC doesn't handle it
-      // Note: Ideally, the match_memories RPC should filter by user_id at the database level
-      // If user_id is present in matches, filter by it. If not, assume RPC already filtered.
-      userMatches =
-        matches?.filter((m: MemoryMatch & { user_id?: string }) => {
-          // If user_id field exists in the match, filter by it
-          if ("user_id" in m) {
-            return m.user_id === userId;
-          }
-          // If user_id doesn't exist, assume RPC already filtered (include the match)
-          return true;
-        }) || [];
-
-      console.log(
-        `Vector search found ${matches?.length || 0} matches, ${
-          userMatches.length
-        } after user filtering`
-      );
-    } catch (embedError) {
-      console.error("Error creating embedding:", embedError);
-    }
-
-    // Fallback: If no vector matches found and it's a question, query all user memories
-    // This helps with cases where vector similarity is low but the information exists
-    if ((!userMatches || userMatches.length === 0) && isQuestion) {
-      console.log(
-        "No vector matches found for question, using fallback to query all user memories"
-      );
-      try {
-        const { data: allMemories, error: queryError } = await supabase
-          .from("memories")
-          .select("id, title, body, user_id, memory_type, created_at")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(30); // Get more recent memories
-
-        if (queryError) {
-          console.error("Error querying fallback memories:", queryError);
-        }
-
-        if (!queryError && allMemories && allMemories.length > 0) {
-          // Use all memories as context for questions when vector search fails
-          // Sort by most recent first
-          userMatches = allMemories.sort(
-            (
-              a: MemoryMatch & { created_at?: string },
-              b: MemoryMatch & { created_at?: string }
-            ) => {
-              const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-              const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
-              return bTime - aTime;
-            }
-          ) as MemoryMatch[];
-          console.log(
-            `Fallback: Using ${userMatches.length} user memories for question`
-          );
-        }
-      } catch (fallbackError) {
-        console.error("Error in fallback memory query:", fallbackError);
-      }
-    }
-
-    // Step 3: Handle special "Do I know about X" questions
-    if (isKnowledgeCheck && isQuestion) {
-      // Extract the topic from "Do I know about RAG" -> "RAG"
-      const topicMatch = inputText.match(
-        /(?:do i know|do you know|do i know about|do you know about|have i learned|have i learned about)\s+(?:about\s+)?(.+)/i
-      );
-      const topic = topicMatch
-        ? topicMatch[1].trim()
-        : inputText
-            .replace(
-              /^(do i know|do you know|do i know about|do you know about|have i learned|have i learned about)\s+(?:about\s+)?/i,
-              ""
-            )
-            .trim();
-
-      // First, ensure we have all user memories for better search
-      if (!userMatches || userMatches.length === 0) {
-        try {
-          const { data: allMemories } = await supabase
-            .from("memories")
-            .select("id, title, body, user_id, memory_type, created_at")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: false })
-            .limit(50);
-
-          if (allMemories && allMemories.length > 0) {
-            userMatches = allMemories as MemoryMatch[];
-          }
-        } catch (err) {
-          console.error(
-            "Error fetching all memories for knowledge check:",
-            err
-          );
-        }
-      }
-
-      // Search for knowledge about this topic in stored memories
-      const topicLower = topic.toLowerCase();
-      let knowledgeFound = false;
-      let relatedMemories: MemoryMatch[] = [];
-      let directKnowledge: MemoryMatch | null = null;
-
-      if (userMatches && userMatches.length > 0) {
-        // Check for direct knowledge and related topics
-        relatedMemories = userMatches.filter((m: MemoryMatch) => {
-          const body = (m.body || "").toLowerCase();
-          const title = (m.title || "").toLowerCase();
-
-          // Direct match
-          if (
-            body.includes(topicLower) ||
-            body.includes(`i know about ${topicLower}`) ||
-            body.includes(`i know ${topicLower}`) ||
-            title.includes(topicLower)
-          ) {
-            directKnowledge = m;
-            return true;
-          }
-
-          // Related topics (partial matches)
-          const words = topicLower.split(/\s+/);
-          return words.some(
-            (word: string) =>
-              word.length > 3 && (body.includes(word) || title.includes(word))
-          );
-        });
-
-        knowledgeFound = directKnowledge !== null || relatedMemories.length > 0;
-      }
-
-      if (knowledgeFound) {
-        // User knows about this topic - create contextual response
-        const context = relatedMemories
-          .map((m: MemoryMatch) => m.body)
-          .join("\n\n");
-
-        const responsePrompt = `You are helping a user check what they know. Based on their stored memories, respond to their question about whether they know about "${topic}".
-
-User's stored knowledge from their database:
-${context}
-
-Question: ${inputText}
-
-INSTRUCTIONS:
-- Respond as if you're checking THEIR knowledge base, not your own
-- Confirm what they know about ${topic} from their stored memories
-- Be conversational and personal
-- If they have related knowledge (e.g., they know about RAG and asking about AI), mention those connections naturally
-- Reference their previous learning if relevant
-- Keep it brief, friendly, and natural
-- Write in second person ("you know...") not first person ("I know...")
-- Focus on what THEY have learned and stored, not general AI knowledge
-
-Respond naturally:`;
-
-        const personalizedResponse = await generateSummary(responsePrompt);
-
-        return respond({
-          type: "question",
-          response: personalizedResponse,
-          answer: personalizedResponse,
-          known: true,
-        });
-      } else {
-        // User doesn't know about this topic - search and learn
-        console.log(
-          `Knowledge check: User doesn't know about ${topic}, searching and learning`
-        );
-        const webAnswer = await generateWithWebSearch(
-          `What is ${topic}? Explain comprehensively in a clear, structured way.`
-        );
-
-        // Store as "I know about X" statement, not Q&A
-        const knowledgeStatement = `I know about ${topic}. ${webAnswer}`;
-        const title = `I know about ${topic}`;
-
-        const memorySave = await trySaveGeneratedMemory({
-          userId,
-          title,
-          body: knowledgeStatement,
-          memoryType: "note",
-        });
-
-        return respond({
-          type: "question",
-          response: `No, you don't know about ${topic} yet. Let me search for information about it...\n\n${webAnswer}`,
-          answer: `No, you don't know about ${topic} yet. Let me search for information about it...\n\n${webAnswer}`,
-          known: false,
-          learned: true,
-          saved: memorySave.saved,
-          saveError: memorySave.error,
-        });
-      }
-    }
-
-    // Step 4: Process based on classification
-    // IMPORTANT: Questions are ALWAYS answered, never treated as statements
-    if (isQuestion) {
-      // It's a question - always answer it
-      if (userMatches && userMatches.length > 0) {
-        // Sort matches by relevance - prioritize exact matches and more specific info
-        // For questions about personal info, look for the most specific/recent entry
-        const sortedMatches = [...userMatches].sort((a, b) => {
-          const aBody = (a.body || "").toLowerCase();
-          const bBody = (b.body || "").toLowerCase();
-          const questionLower = inputText.toLowerCase();
-
-          // Prioritize exact matches in the body
-          if (aBody.includes(questionLower) && !bBody.includes(questionLower))
-            return -1;
-          if (!aBody.includes(questionLower) && bBody.includes(questionLower))
-            return 1;
-
-          // Prioritize shorter, more specific entries (likely more direct answers)
-          if (aBody.length < bBody.length) return -1;
-          if (aBody.length > bBody.length) return 1;
-
-          return 0;
-        });
-
-        // We have stored memories - use them to answer
-        const context = sortedMatches
-          .map((m: MemoryMatch) => m.body)
-          .join("\n\n");
-
-        const answerPrompt = `You are a helpful assistant with access to the user's personal knowledge base. Answer the question naturally and conversationally based on their stored memories.
-
-The user's stored knowledge:
-${context}
-
-Question: ${inputText}
-
-INSTRUCTIONS:
-- Answer based ONLY on the user's stored memories above
-- Be conversational and natural, like talking to a friend
-- Reference their stored information naturally
-- If they have related knowledge, you can mention it
-- Extract the EXACT information that answers the question
-- If multiple answers exist, use the MOST RECENT or MOST SPECIFIC one
-- For personal info (name, password), extract the EXACT value
-- If the stored information does NOT contain the answer, respond with exactly: "NOT_IN_STORED_INFO"
-- Write as if you're recalling what they know, not what you know as an AI
-
-Answer naturally and conversationally:`;
-
-        const answer = await generateSummary(answerPrompt);
-
-        // Check if the answer indicates the info wasn't in stored data
-        const answerLower = answer.toLowerCase().trim();
-        if (
-          answerLower.includes("not_in_stored_info") ||
-          answerLower.includes("don't have") ||
-          answerLower.includes("don't have that information") ||
-          answerLower.includes("i don't have") ||
-          (answerLower.length < 20 && answerLower.includes("don't"))
-        ) {
-          // The stored info doesn't answer the question - use web search
-          console.log(
-            "Stored memories don't answer the question, using web search"
-          );
-          const webAnswer = await generateWithWebSearch(inputText);
-
-          // Extract topic from question for better storage
-          // For questions like "what is RAG", store as "I know about RAG"
-          let knowledgeStatement = webAnswer;
-          const whatIsMatch = inputText.match(/what (?:is|are) (.+)/i);
-          if (whatIsMatch) {
-            const topic = whatIsMatch[1].trim();
-            knowledgeStatement = `I know about ${topic}. ${webAnswer}`;
-          } else {
-            // Store as Q&A for other types of questions
-            knowledgeStatement = `Q: ${inputText}\nA: ${webAnswer}`;
-          }
-
-          const title =
-            inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
-
-          const memorySave = await trySaveGeneratedMemory({
-            userId,
-            title,
-            body: knowledgeStatement,
-            memoryType: "question",
-          });
-
-          return respond({
-            type: "question",
-            response: webAnswer,
-            answer: webAnswer,
-            known: false,
-            learned: true,
-            saved: memorySave.saved,
-            saveError: memorySave.error,
-          });
-        }
-
-        return respond({
-          type: "question",
-          response: answer,
-          answer: answer, // For backward compatibility
-          known: true,
-          relatedCount: userMatches.length,
-        });
-      } else {
-        // Question but no stored memories - will be handled in Step 4
-        // Continue to Step 4 to generate answer and store it
-      }
-    } else if (userMatches && userMatches.length > 0) {
-      // It's a statement and we have matches - check for duplicates
-      const context = userMatches.map((m: MemoryMatch) => m.body).join("\n\n");
-      // User is providing new info
-      // Only check similarity if we have a reasonable number of matches (likely relevant)
-      // For statements, if matches exist, they might be similar - but we should still store
-      // unless it's EXACTLY the same information
-
-      // Check if the exact same text already exists
-      const exactMatch = userMatches.find(
-        (m: MemoryMatch) =>
-          m.body.toLowerCase().trim() === inputText.toLowerCase().trim()
-      );
-
-      if (exactMatch) {
-        return respond({
-          type: "note",
-          response:
-            "I already have this exact information stored. Is there anything else you'd like to add or clarify?",
-          message: "Information already exists",
-        });
-      }
-
-      // For similar but not exact matches, do a quick similarity check
-      // But only if we have a small number of highly relevant matches
-      if (userMatches.length <= 3) {
-        const similarityCheckPrompt = `Compare these two pieces of information. Are they essentially the SAME information (not just related, but the same fact)?
-
-Existing stored information:
-${context}
-
-New information provided:
-${inputText}
-
-Respond with ONLY "same" if they contain the exact same information/fact, or "different" if the new information is different or adds new details. Be strict - only say "same" if it's truly the same information.`;
-
-        const similarity = (await generateSummary(similarityCheckPrompt))
-          .trim()
-          .toLowerCase();
-
-        if (similarity.includes("same") && !similarity.includes("different")) {
-          return respond({
-            type: "note",
-            response:
-              "I already have this information stored. Is there anything else you'd like to add or clarify?",
-            message: "Information already exists",
-          });
-        }
-      }
-
-      // Store the new information (original text, not summarized)
-      const title =
-        inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
-
-      const memorySave = await trySaveUserMemory({
+    const knowledgeTopic = parseKnowledgeTopic(inputText);
+    if (knowledgeTopic) {
+      const gap = await detectKnowledgeGap({
         userId,
-        title,
-        body: inputText,
-        embedding: queryEmbedding,
+        topic: knowledgeTopic,
+        spaceId: selectedSpaceId,
       });
+      let newLesson: string | null = null;
+      let generatedSave: SaveMemoryWithIntelligenceResult | null = null;
 
-      if (!memorySave.saved) {
-        return respond({
-          type: "note",
-          response:
-            "I understood that, but I couldn't save it as a memory right now. Please try again in a moment.",
-          message: "Memory save failed",
-          saved: false,
-          saveError: memorySave.error,
+      if (gap.status === "unknown") {
+        newLesson = await generateWithWebSearch(
+          `Explain ${knowledgeTopic} clearly for a learner. Include the core idea and a small example.`
+        );
+        generatedSave = await createGeneratedLearningMemory({
+          userId,
+          topic: knowledgeTopic,
+          body: `AI-generated primer on ${knowledgeTopic}:\n\n${newLesson}`,
+          spaceId: selectedSpaceId,
         });
       }
 
       return respond({
-        type: "note",
-        response:
-          "Got it! I've saved this information. I can recall it when you ask related questions.",
-        message: "Memory saved!",
+        type: "knowledge_gap",
+        response: formatKnowledgeGapResponse({
+          topic: knowledgeTopic,
+          gap,
+          newLesson,
+        }),
+        knowledgeStatus: gap.status,
+        knownPoints: gap.knownPoints,
+        missingPoints: gap.missingPoints,
+        suggestedNextSteps: gap.suggestedNextSteps,
+        relatedCount: gap.relatedMemories.length,
+        saved: generatedSave?.memorySaved ?? false,
+        generatedMemoryId: generatedSave?.memoryId,
+        topic: knowledgeTopic,
       });
     }
 
-    // Step 4: Handle questions without matches or statements without matches
     if (isQuestion) {
-      // Question with no stored context - use web search to find answer
-      console.log(
-        "No stored memories found, using web search to answer question"
-      );
+      const relatedMemories = await searchRelatedMemories({
+        inputText,
+        userId,
+        spaceId: selectedSpaceId,
+        count: 12,
+      });
 
-      // Use web search to get current information
-      const answer = await generateWithWebSearch(inputText);
+      if (relatedMemories.length > 0) {
+        const storedAnswer = await answerFromStoredMemories(
+          inputText,
+          relatedMemories
+        );
 
-      // Extract topic from question for better storage
-      // For questions like "what is RAG", store as "I know about RAG"
-      let knowledgeStatement = answer;
-      const whatIsMatch = inputText.match(/what (?:is|are) (.+)/i);
-      if (whatIsMatch) {
-        const topic = whatIsMatch[1].trim();
-        knowledgeStatement = `I know about ${topic}. ${answer}`;
-      } else {
-        // Store as Q&A for other types of questions
-        knowledgeStatement = `Q: ${inputText}\nA: ${answer}`;
+        if (!answerWasNotInStoredInfo(storedAnswer)) {
+          return respond({
+            type: "question",
+            response: storedAnswer,
+            answer: storedAnswer,
+            known: true,
+            knowledgeStatus: "known",
+            relatedCount: relatedMemories.length,
+            topic: relatedMemories[0]?.topic ?? undefined,
+          });
+        }
       }
 
-      const title =
-        inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
-
-      const memorySave = await trySaveGeneratedMemory({
+      const answer = await generateWithWebSearch(inputText);
+      const generatedMemory = createGeneratedMemoryBody(inputText, answer);
+      const memorySave = await createGeneratedLearningMemory({
         userId,
-        title,
-        body: knowledgeStatement,
-        memoryType: "question",
+        topic: generatedMemory.topic,
+        body: generatedMemory.body,
+        spaceId: selectedSpaceId,
       });
 
       return respond({
         type: "question",
         response: answer,
-        answer: answer, // For backward compatibility
+        answer,
         known: false,
+        knowledgeStatus: "unknown",
         learned: true,
-        saved: memorySave.saved,
-        saveError: memorySave.error,
-      });
-    } else {
-      // Statement/info with no stored context - store it directly
-      const title =
-        inputText.length > 60 ? inputText.slice(0, 57) + "..." : inputText;
-
-      const memorySave = await trySaveUserMemory({
-        userId,
-        title,
-        body: inputText,
-        embedding: queryEmbedding,
-      });
-
-      if (!memorySave.saved) {
-        return respond({
-          type: "note",
-          response:
-            "I understood that, but I couldn't save it as a memory right now. Please try again in a moment.",
-          message: "Memory save failed",
-          saved: false,
-          saveError: memorySave.error,
-        });
-      }
-
-      return respond({
-        type: "note",
-        response:
-          "Perfect! I've saved this information. I'll remember it and can reference it when you ask related questions.",
-        message: "Memory saved!",
+        ...saveMetadata(memorySave),
       });
     }
+
+    const memorySave = await saveMemoryWithIntelligence({
+      userId,
+      title: truncateTitle(inputText),
+      body: inputText,
+      memoryType: "note",
+      source: "user",
+      spaceId: selectedSpaceId,
+    });
+
+    return respond({
+      type: "note",
+      response: buildSaveResponse(memorySave),
+      message: memorySave.memorySaved ? "Memory saved" : "Memory save failed",
+      ...saveMetadata(memorySave),
+    });
   } catch (err: unknown) {
     console.error("Error processing memory:", err);
-    const errorMessage = getErrorMessage(err) || "Internal Server Error";
+    const errorMessage = getPublicErrorMessage(err) || "Internal Server Error";
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -2,21 +2,25 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { Components } from "react-markdown";
 import {
   AlertCircle,
+  Archive,
   ArrowDown,
   Bot,
   Brain,
   Check,
   Clock3,
   Copy,
+  GitFork,
+  Layers,
   Loader2,
   Menu,
   MessageSquare,
   Plus,
   Send,
+  ShieldAlert,
   Sparkles,
   Trash2,
   User,
@@ -30,13 +34,35 @@ import remarkGfm from "remark-gfm";
 const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
 const USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
 const CURRENT_SESSION_KEY = "learning-brain-current-session";
+const CURRENT_SPACE_KEY = "learning-brain-current-space";
 const MAX_COMPOSER_HEIGHT = 164;
+const RECENT_INITIAL_COUNT = 3;
+const RECENT_BATCH_COUNT = 4;
+
+type KnowledgeStatus = "known" | "partial" | "unknown";
+
+interface ResponseMetadata {
+  type?: string;
+  saved?: boolean;
+  indexed?: boolean;
+  knowledgeStatus?: KnowledgeStatus;
+  needsReview?: boolean;
+  relationTypes?: string[];
+  topic?: string;
+  tags?: string[];
+  spaceName?: string;
+  confidenceScore?: number;
+  confidenceStatus?: string;
+  relatedCount?: number;
+  memoryCount?: number;
+}
 
 interface Message {
   id: string;
   content: string;
   role: "user" | "assistant";
   timestamp: Date;
+  metadata?: ResponseMetadata;
 }
 
 interface ChatSession {
@@ -45,6 +71,75 @@ interface ChatSession {
   created_at: string;
   updated_at: string;
 }
+
+interface Space {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+interface MemoryInsightTopic {
+  label: string;
+  count: number;
+}
+
+interface MemoryInsightMemory {
+  id: string;
+  title: string;
+  topic?: string | null;
+  body?: string;
+  created_at?: string;
+  confidence_score?: number;
+  confidence_status?: string;
+  needs_review?: boolean;
+}
+
+interface MemoryInsights {
+  total: number;
+  needsReviewCount: number;
+  dueReviewCount: number;
+  thisWeekCount?: number;
+  topTopics: MemoryInsightTopic[];
+  weakTopics: MemoryInsightTopic[];
+  recentMemories: MemoryInsightMemory[];
+}
+
+interface GraphData {
+  nodes: Array<{
+    id: string;
+    type: string;
+    label: string;
+    needsReview?: boolean;
+    confidenceScore?: number;
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    type: string;
+    reason?: string | null;
+  }>;
+}
+
+interface ReviewRelation {
+  id: string;
+  relation_type: string;
+  reason?: string | null;
+  relatedMemory?: MemoryInsightMemory | null;
+}
+
+interface ReviewItem {
+  memory: MemoryInsightMemory;
+  relations: ReviewRelation[];
+  primaryReason: string;
+}
+
+type ReviewAction =
+  | "remembered"
+  | "needs_practice"
+  | "resolved"
+  | "mastered"
+  | "archive";
 
 interface ApiChatMessage {
   id: string;
@@ -62,6 +157,113 @@ function toChatMessages(apiMessages: ApiChatMessage[]): Message[] {
   }));
 }
 
+function getString(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function getFriendlyErrorMessage(value: unknown, fallback = "Something went wrong") {
+  const raw = typeof value === "string" ? value : fallback;
+  let searchable = raw;
+
+  if (raw.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as {
+        error?: { code?: number; message?: string; status?: string };
+      };
+      const providerError = parsed.error;
+      searchable = [
+        providerError?.code,
+        providerError?.message,
+        providerError?.status,
+      ]
+        .filter((item) => item !== undefined && item !== null)
+        .join(" ");
+    } catch {
+      searchable = raw;
+    }
+  }
+
+  const lower = searchable.toLowerCase();
+  if (
+    lower.includes("currently experiencing high demand") ||
+    lower.includes("unavailable") ||
+    lower.includes("503")
+  ) {
+    return "The AI model is busy right now. Please try again in a moment.";
+  }
+
+  if (
+    lower.includes("quota") ||
+    lower.includes("rate limit") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("429")
+  ) {
+    return "The AI usage limit was reached for now. Please wait a bit and try again.";
+  }
+
+  return raw;
+}
+
+function getNumber(value: unknown) {
+  return typeof value === "number" ? value : undefined;
+}
+
+function getStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : undefined;
+}
+
+function getKnowledgeStatus(value: unknown): KnowledgeStatus | undefined {
+  return value === "known" || value === "partial" || value === "unknown"
+    ? value
+    : undefined;
+}
+
+function createResponseMetadata(data: Record<string, unknown>): ResponseMetadata {
+  return {
+    type: getString(data.type),
+    saved: typeof data.saved === "boolean" ? data.saved : undefined,
+    indexed: typeof data.indexed === "boolean" ? data.indexed : undefined,
+    knowledgeStatus: getKnowledgeStatus(data.knowledgeStatus),
+    needsReview:
+      typeof data.needsReview === "boolean" ? data.needsReview : undefined,
+    relationTypes: getStringArray(data.relationTypes),
+    topic: getString(data.topic),
+    tags: getStringArray(data.tags),
+    spaceName: getString(data.spaceName),
+    confidenceScore: getNumber(data.confidenceScore),
+    confidenceStatus: getString(data.confidenceStatus),
+    relatedCount: getNumber(data.relatedCount),
+    memoryCount: getNumber(data.memoryCount),
+  };
+}
+
+function isSetupSpaceId(spaceId: string | null | undefined) {
+  return Boolean(spaceId?.startsWith("setup-"));
+}
+
+function findSelectableSpace(
+  spaces: Space[],
+  spaceId: string | null | undefined,
+  allowSetupSpace: boolean
+) {
+  if (!spaceId || (!allowSetupSpace && isSetupSpaceId(spaceId))) return null;
+  return spaces.find((space) => space.id === spaceId) ?? null;
+}
+
+function findDefaultSpace(spaces: Space[], allowSetupSpace: boolean) {
+  const usableSpaces = allowSetupSpace
+    ? spaces
+    : spaces.filter((space) => !isSetupSpaceId(space.id));
+
+  return (
+    usableSpaces.find((space) => space.name.toLowerCase() === "general") ??
+    usableSpaces[0] ??
+    null
+  );
+}
+
 function prefersReducedMotion() {
   return (
     typeof window !== "undefined" &&
@@ -72,11 +274,20 @@ function prefersReducedMotion() {
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSpaceId, setCurrentSpaceId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [isLoadingSpaces, setIsLoadingSpaces] = useState(false);
+  const [memoryInsights, setMemoryInsights] = useState<MemoryInsights | null>(
+    null
+  );
+  const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
+  const [setupMessage, setSetupMessage] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +347,109 @@ export default function Home() {
     }
   }, []);
 
+  const loadSpaces = useCallback(async () => {
+    setIsLoadingSpaces(true);
+
+    try {
+      const response = await fetch(
+        `/api/spaces?userId=${encodeURIComponent(USER_ID)}`
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load spaces");
+      }
+
+      const loadedSpaces = (data.spaces ?? []) as Space[];
+      const allowSetupSpace = Boolean(data.setupRequired);
+      setSpaces(loadedSpaces);
+      if (data.setupRequired && typeof data.setupMessage === "string") {
+        setSetupMessage(data.setupMessage);
+      } else {
+        setSetupMessage(null);
+      }
+      setCurrentSpaceId((existingSpaceId) => {
+        const existingSpace = findSelectableSpace(
+          loadedSpaces,
+          existingSpaceId,
+          allowSetupSpace
+        );
+        const storedSpaceId = window.localStorage.getItem(CURRENT_SPACE_KEY);
+        const storedSpace = findSelectableSpace(
+          loadedSpaces,
+          storedSpaceId,
+          allowSetupSpace
+        );
+        const nextSpace =
+          existingSpace ??
+          storedSpace ??
+          findDefaultSpace(loadedSpaces, allowSetupSpace);
+
+        if (nextSpace && !isSetupSpaceId(nextSpace.id)) {
+          window.localStorage.setItem(CURRENT_SPACE_KEY, nextSpace.id);
+        } else {
+          window.localStorage.removeItem(CURRENT_SPACE_KEY);
+        }
+
+        return nextSpace?.id ?? null;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load spaces");
+    } finally {
+      setIsLoadingSpaces(false);
+    }
+  }, []);
+
+  const loadMemoryIntelligence = useCallback(async () => {
+    const query = new URLSearchParams({
+      userId: USER_ID,
+      limit: "80",
+    });
+
+    if (currentSpaceId && !isSetupSpaceId(currentSpaceId)) {
+      query.set("spaceId", currentSpaceId);
+    }
+
+    try {
+      const [memoriesResponse, graphResponse, reviewResponse] = await Promise.all([
+        fetch(`/api/memories?${query.toString()}`),
+        fetch(`/api/graph?${query.toString()}`),
+        fetch(`/api/review?${query.toString()}`),
+      ]);
+      const [memoriesData, graphResponseData, reviewData] = await Promise.all([
+        memoriesResponse.json(),
+        graphResponse.json(),
+        reviewResponse.json(),
+      ]);
+
+      if (!memoriesResponse.ok) {
+        throw new Error(memoriesData.error || "Failed to load memory insights");
+      }
+
+      if (!graphResponse.ok) {
+        throw new Error(graphResponseData.error || "Failed to load graph");
+      }
+
+      if (!reviewResponse.ok) {
+        throw new Error(reviewData.error || "Failed to load review queue");
+      }
+
+      setMemoryInsights(memoriesData.insights ?? null);
+      setGraphData(graphResponseData ?? null);
+      setReviewItems((reviewData.reviewItems ?? []) as ReviewItem[]);
+      const nextSetupMessage =
+        (typeof memoriesData.setupMessage === "string" &&
+          memoriesData.setupMessage) ||
+        (typeof graphResponseData.setupMessage === "string" &&
+          graphResponseData.setupMessage) ||
+        (typeof reviewData.setupMessage === "string" && reviewData.setupMessage) ||
+        null;
+      if (nextSetupMessage) setSetupMessage(nextSetupMessage);
+    } catch (err) {
+      console.warn("Failed to load memory intelligence:", err);
+    }
+  }, [currentSpaceId]);
+
   const loadSession = useCallback(async (sessionId: string) => {
     setIsLoadingSession(true);
     setError(null);
@@ -165,6 +479,15 @@ export default function Home() {
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
+
+  useEffect(() => {
+    void loadSpaces();
+  }, [loadSpaces]);
+
+  useEffect(() => {
+    if (spaces.length === 0 && !currentSpaceId) return;
+    void loadMemoryIntelligence();
+  }, [currentSpaceId, loadMemoryIntelligence, spaces.length]);
 
   useEffect(() => {
     if (hasLoadedStoredSession.current) return;
@@ -200,20 +523,23 @@ export default function Home() {
           inputText: userMessage.content,
           userId: USER_ID,
           sessionId: currentSessionId,
+          spaceId: isSetupSpaceId(currentSpaceId) ? null : currentSpaceId,
         }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as Record<string, unknown>;
 
       if (!response.ok) {
-        throw new Error(data.error || `Error: ${response.status}`);
+        throw new Error(
+          getFriendlyErrorMessage(data.error, `Error: ${response.status}`)
+        );
       }
 
       let responseText = "";
-      if (data.error) responseText = `Error: ${data.error}`;
-      else if (data.response) responseText = data.response;
-      else if (data.answer) responseText = data.answer;
-      else if (data.message) responseText = data.message;
+      if (data.error) responseText = `Error: ${String(data.error)}`;
+      else if (typeof data.response === "string") responseText = data.response;
+      else if (typeof data.answer === "string") responseText = data.answer;
+      else if (typeof data.message === "string") responseText = data.message;
       else
         responseText = "I received your message. How can I help you further?";
 
@@ -222,23 +548,31 @@ export default function Home() {
         content: responseText,
         role: "assistant",
         timestamp: new Date(),
+        metadata: createResponseMetadata(data),
       };
 
-      if (data.sessionId) {
+      if (typeof data.sessionId === "string") {
         setCurrentSessionId(data.sessionId);
         window.sessionStorage.setItem(CURRENT_SESSION_KEY, data.sessionId);
       }
 
       if (data.sessionSaved === false && data.sessionError) {
         setError(
-          `Answer returned, but the chat session was not saved: ${data.sessionError}`
+          `Answer returned, but the chat session was not saved: ${String(
+            data.sessionError
+          )}`
         );
       }
 
       setMessages((prev) => [...prev, assistantMessage]);
       void loadSessions();
+      void loadMemoryIntelligence();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send message");
+      setError(
+        err instanceof Error
+          ? getFriendlyErrorMessage(err.message)
+          : "Failed to send message"
+      );
       console.warn("Error sending message:", err);
     } finally {
       setIsLoading(false);
@@ -263,6 +597,49 @@ export default function Home() {
   const applyPrompt = (prompt: string) => {
     setInput(prompt);
     requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const changeSpace = (spaceId: string) => {
+    setCurrentSpaceId(spaceId || null);
+    if (spaceId && !isSetupSpaceId(spaceId)) {
+      window.localStorage.setItem(CURRENT_SPACE_KEY, spaceId);
+    } else {
+      window.localStorage.removeItem(CURRENT_SPACE_KEY);
+    }
+  };
+
+  const handleReviewAction = async (
+    memoryId: string,
+    action: ReviewAction,
+    relationId?: string
+  ) => {
+    try {
+      const response = await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: USER_ID,
+          memoryId,
+          action,
+          relationId,
+          resolution:
+            action === "resolved"
+              ? "Resolved from the review queue."
+              : undefined,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to update review item");
+      }
+
+      void loadMemoryIntelligence();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update review item"
+      );
+    }
   };
 
   const deleteSession = async (sessionId: string) => {
@@ -320,6 +697,8 @@ export default function Home() {
   const activeSessionTitle =
     sessions.find((session) => session.id === currentSessionId)?.title ??
     "Fresh thread";
+  const activeSpace = spaces.find((space) => space.id === currentSpaceId);
+  const activeSpaceName = activeSpace?.name ?? "General";
 
   return (
     <div className="app-stage h-[100dvh] overflow-hidden text-[#f7faff]">
@@ -328,11 +707,19 @@ export default function Home() {
           <SessionNavigation
             sessions={sessions}
             currentSessionId={currentSessionId}
+            activeSpaceName={activeSpaceName}
+            memoryInsights={memoryInsights}
+            graphData={graphData}
+            reviewItems={reviewItems}
+            setupMessage={setupMessage}
             isLoadingSessions={isLoadingSessions}
             isLoadingSession={isLoadingSession}
+            isLoadingSpaces={isLoadingSpaces}
             onNewChat={startNewChat}
             onLoadSession={loadSession}
             onDeleteSession={deleteSession}
+            onApplyPrompt={applyPrompt}
+            onReviewAction={handleReviewAction}
             formatSessionTime={formatSessionTime}
           />
         </aside>
@@ -360,11 +747,19 @@ export default function Home() {
               <SessionNavigation
                 sessions={sessions}
                 currentSessionId={currentSessionId}
+                activeSpaceName={activeSpaceName}
+                memoryInsights={memoryInsights}
+                graphData={graphData}
+                reviewItems={reviewItems}
+                setupMessage={setupMessage}
                 isLoadingSessions={isLoadingSessions}
                 isLoadingSession={isLoadingSession}
+                isLoadingSpaces={isLoadingSpaces}
                 onNewChat={startNewChat}
                 onLoadSession={loadSession}
                 onDeleteSession={deleteSession}
+                onApplyPrompt={applyPrompt}
+                onReviewAction={handleReviewAction}
                 formatSessionTime={formatSessionTime}
               />
             </aside>
@@ -404,6 +799,26 @@ export default function Home() {
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
+              <label htmlFor="space-select" className="sr-only">
+                Active space
+              </label>
+              <div className="flex h-10 max-w-[8.5rem] min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 text-slate-300 sm:max-w-[11rem] md:max-w-[14rem]">
+                <Layers className="h-4 w-4 shrink-0 text-blue-300" aria-hidden="true" />
+                <select
+                  id="space-select"
+                  value={currentSpaceId ?? ""}
+                  onChange={(event) => changeSpace(event.target.value)}
+                  disabled={isLoadingSpaces || spaces.length === 0}
+                  className="min-w-0 max-w-[5.5rem] bg-transparent text-sm font-medium text-slate-100 outline-none disabled:cursor-wait disabled:text-slate-500 sm:max-w-[8rem] md:max-w-[11rem]"
+                >
+                  {spaces.length === 0 && <option value="">General</option>}
+                  {spaces.map((space) => (
+                    <option key={space.id} value={space.id} className="bg-[#111827]">
+                      {space.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <button
                 type="button"
                 onClick={startNewChat}
@@ -464,10 +879,10 @@ export default function Home() {
               </button>
             )}
 
-            <div className="composer-zone shrink-0 border-t border-white/10 px-2.5 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-2.5 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
+            <div className="composer-zone shrink-0 border-t border-white/10 px-2 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
               <form
                 onSubmit={handleSubmit}
-                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-2 rounded-[1.35rem] border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:rounded-2xl"
+                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-1.5 rounded-2xl border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:gap-2 sm:rounded-2xl"
               >
                 <div className="relative min-w-0 flex-1">
                   <label htmlFor="chat-input" className="sr-only">
@@ -478,7 +893,7 @@ export default function Home() {
                     ref={inputRef}
                     value={input}
                     onChange={(event) => setInput(event.target.value)}
-                    placeholder="Share a thought, question, or code snippet..."
+                    placeholder="Ask or save a note..."
                     rows={1}
                     disabled={isLoading}
                     onKeyDown={(event) => {
@@ -487,14 +902,14 @@ export default function Home() {
                         void submitMessage();
                       }
                     }}
-                    className="max-h-[164px] min-h-[46px] w-full resize-none overflow-y-auto rounded-[1rem] border border-transparent bg-transparent px-3 py-2.5 pr-4 text-base leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500"
+                    className="max-h-[164px] min-h-[42px] w-full resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2 pr-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500 sm:min-h-[46px] sm:rounded-[1rem] sm:py-2.5 sm:pr-4 sm:text-base"
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={!canSend}
                   aria-label={isLoading ? "Sending message" : "Send message"}
-                  className="send-button flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                  className="send-button flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 sm:h-[46px] sm:w-[46px]"
                 >
                   {isLoading ? (
                     <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
@@ -514,22 +929,59 @@ export default function Home() {
 function SessionNavigation({
   sessions,
   currentSessionId,
+  activeSpaceName,
+  memoryInsights,
+  graphData,
+  reviewItems,
+  setupMessage,
   isLoadingSessions,
   isLoadingSession,
+  isLoadingSpaces,
   onNewChat,
   onLoadSession,
   onDeleteSession,
+  onApplyPrompt,
+  onReviewAction,
   formatSessionTime,
 }: {
   sessions: ChatSession[];
   currentSessionId: string | null;
+  activeSpaceName: string;
+  memoryInsights: MemoryInsights | null;
+  graphData: GraphData | null;
+  reviewItems: ReviewItem[];
+  setupMessage: string | null;
   isLoadingSessions: boolean;
   isLoadingSession: boolean;
+  isLoadingSpaces: boolean;
   onNewChat: () => void;
   onLoadSession: (sessionId: string) => Promise<void>;
   onDeleteSession: (sessionId: string) => Promise<void>;
+  onApplyPrompt: (prompt: string) => void;
+  onReviewAction: (
+    memoryId: string,
+    action: ReviewAction,
+    relationId?: string
+  ) => Promise<void>;
   formatSessionTime: (value: string) => string;
 }) {
+  const sessionListKey = sessions.map((session) => session.id).join("|");
+  const [recentDisplay, setRecentDisplay] = useState({
+    count: RECENT_INITIAL_COUNT,
+    key: sessionListKey,
+  });
+  const visibleSessionCount =
+    recentDisplay.key === sessionListKey
+      ? recentDisplay.count
+      : RECENT_INITIAL_COUNT;
+  const visibleSessions = sessions.slice(0, visibleSessionCount);
+  const hiddenSessionCount = Math.max(sessions.length - visibleSessions.length, 0);
+  const canShowFewerSessions = visibleSessionCount > RECENT_INITIAL_COUNT;
+  const nextSessionBatchCount = Math.min(
+    RECENT_BATCH_COUNT,
+    hiddenSessionCount
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-white/10 p-4">
@@ -563,81 +1015,633 @@ function SessionNavigation({
         </button>
       </div>
 
-      <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
-        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-          <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
-          Recent
-        </h2>
-        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-400">
-          {sessions.length}
-        </span>
+      <div className="messages-container min-h-0 flex-1 overflow-y-auto pb-3">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/5 bg-[#090d18]/95 px-4 pb-2 pt-4 backdrop-blur">
+          <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+            <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+            Recent
+          </h2>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-400">
+            {sessions.length > RECENT_INITIAL_COUNT
+              ? `${visibleSessions.length}/${sessions.length}`
+              : sessions.length}
+          </span>
+        </div>
+
+        <div className="space-y-1 px-2 py-3">
+          {isLoadingSessions ? (
+            <SessionLoading />
+          ) : sessions.length === 0 ? (
+            <div className="mx-2 rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.03] px-3 py-4 text-sm leading-6 text-slate-400">
+              No saved sessions yet. Start a chat and it will appear here.
+            </div>
+          ) : (
+            <>
+              {visibleSessions.map((session) => {
+                const isActive = session.id === currentSessionId;
+
+                return (
+                  <div
+                    key={session.id}
+                    className={`group flex min-w-0 items-stretch rounded-2xl border transition ${
+                      isActive
+                        ? "border-blue-400/[0.35] bg-blue-500/[0.12]"
+                        : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void onLoadSession(session.id)}
+                      disabled={isLoadingSession}
+                      className="min-w-0 flex-1 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-300"
+                    >
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-100">
+                        <MessageSquare
+                          className={`h-4 w-4 shrink-0 ${
+                            isActive ? "text-blue-300" : "text-slate-500"
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{session.title}</span>
+                      </span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        {formatSessionTime(session.updated_at)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onDeleteSession(session.id)}
+                      title="Delete session"
+                      className="flex w-10 shrink-0 items-center justify-center text-slate-600 opacity-100 transition hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-300 sm:opacity-0 sm:group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
+
+              {(hiddenSessionCount > 0 || canShowFewerSessions) && (
+                <div className="mt-2 space-y-2">
+                  {hiddenSessionCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRecentDisplay({
+                          count: Math.min(
+                            visibleSessionCount + RECENT_BATCH_COUNT,
+                            sessions.length
+                          ),
+                          key: sessionListKey,
+                        })
+                      }
+                      className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-blue-300/30 hover:bg-blue-500/[0.08] hover:text-blue-100 active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Show {nextSessionBatchCount} more</span>
+                      <span className="font-normal text-slate-500">
+                        {hiddenSessionCount} left
+                      </span>
+                    </button>
+                  )}
+
+                  {canShowFewerSessions && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRecentDisplay({
+                          count: RECENT_INITIAL_COUNT,
+                          key: sessionListKey,
+                        })
+                      }
+                      className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-400 transition hover:border-white/15 hover:bg-white/[0.04] hover:text-slate-100 active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                    >
+                      <ArrowDown
+                        className="h-3.5 w-3.5 rotate-180"
+                        aria-hidden="true"
+                      />
+                      <span>Show less</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <MemoryIntelligencePanel
+          activeSpaceName={activeSpaceName}
+          insights={memoryInsights}
+          graphData={graphData}
+          reviewItems={reviewItems}
+          setupMessage={setupMessage}
+          isLoading={isLoadingSpaces}
+          onApplyPrompt={onApplyPrompt}
+          onReviewAction={onReviewAction}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MemoryIntelligencePanel({
+  activeSpaceName,
+  insights,
+  graphData,
+  reviewItems,
+  setupMessage,
+  isLoading,
+  onApplyPrompt,
+  onReviewAction,
+}: {
+  activeSpaceName: string;
+  insights: MemoryInsights | null;
+  graphData: GraphData | null;
+  reviewItems: ReviewItem[];
+  setupMessage: string | null;
+  isLoading: boolean;
+  onApplyPrompt: (prompt: string) => void;
+  onReviewAction: (
+    memoryId: string,
+    action: ReviewAction,
+    relationId?: string
+  ) => Promise<void>;
+}) {
+  return (
+    <div className="border-t border-white/10 px-3 py-4">
+      <div className="space-y-4">
+        {setupMessage && <SetupNotice message={setupMessage} />}
+
+        <LearningSnapshot
+          activeSpaceName={activeSpaceName}
+          insights={insights}
+          isLoading={isLoading}
+          onWeeklySummary={() => onApplyPrompt("weekly summary")}
+        />
+
+        <RecentMemoriesList memories={insights?.recentMemories ?? []} />
+
+        <ReviewQueue
+          reviewItems={reviewItems}
+          onReviewAction={onReviewAction}
+        />
+
+        <SuggestedNextAction
+          insights={insights}
+          reviewItems={reviewItems}
+          onApplyPrompt={onApplyPrompt}
+        />
+
+        <ConnectionsSummary graphData={graphData} />
+      </div>
+    </div>
+  );
+}
+
+function LearningSnapshot({
+  activeSpaceName,
+  insights,
+  isLoading,
+  onWeeklySummary,
+}: {
+  activeSpaceName: string;
+  insights: MemoryInsights | null;
+  isLoading: boolean;
+  onWeeklySummary: () => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+            Learning space
+          </p>
+          <div className="mt-1 flex min-w-0 items-center gap-2">
+            <Layers className="h-4 w-4 shrink-0 text-blue-300" aria-hidden="true" />
+            <span className="truncate text-sm font-semibold text-slate-100">
+              {activeSpaceName}
+            </span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            {isLoading ? "Updating your memory view" : "Only this space is shown here"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onWeeklySummary}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-300/20 bg-blue-500/[0.10] text-blue-100 transition hover:bg-blue-500/[0.16] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+          title="Generate weekly summary"
+          aria-label="Generate weekly summary"
+        >
+          <Sparkles className="h-4 w-4" aria-hidden="true" />
+        </button>
       </div>
 
-      <div className="messages-container flex-1 space-y-1 overflow-y-auto px-2 pb-3">
-        {isLoadingSessions ? (
-          <SessionLoading />
-        ) : sessions.length === 0 ? (
-          <div className="mx-2 rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.03] px-3 py-4 text-sm leading-6 text-slate-400">
-            No saved sessions yet. Start a chat and it will appear here.
-          </div>
-        ) : (
-          sessions.map((session) => {
-            const isActive = session.id === currentSessionId;
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <MiniMetric label="Saved" value={insights?.total ?? 0} icon={Brain} />
+        <MiniMetric
+          label="This week"
+          value={insights?.thisWeekCount ?? 0}
+          icon={Sparkles}
+        />
+        <MiniMetric
+          label="To review"
+          value={insights?.needsReviewCount ?? 0}
+          icon={ShieldAlert}
+          warn={(insights?.needsReviewCount ?? 0) > 0}
+        />
+      </div>
+    </section>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  icon: Icon,
+  warn = false,
+}: {
+  label: string;
+  value: number;
+  icon: typeof Brain;
+  warn?: boolean;
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-white/10 bg-black/[0.12] px-2 py-2 text-center">
+      <Icon
+        className={`mx-auto h-3.5 w-3.5 ${
+          warn ? "text-amber-300" : "text-blue-300"
+        }`}
+        aria-hidden="true"
+      />
+      <div className="mt-1 text-sm font-semibold leading-none text-slate-100">
+        {value}
+      </div>
+      <div className="mt-1 truncate text-[10px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+function SetupNotice({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3">
+      <div className="flex items-center gap-2 text-xs font-semibold text-amber-100">
+        <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+        Database setup needed
+      </div>
+      <p className="mt-1 text-xs leading-5 text-amber-100/80">{message}</p>
+    </div>
+  );
+}
+
+function SidebarSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function RecentMemoriesList({ memories }: { memories: MemoryInsightMemory[] }) {
+  return (
+    <SidebarSection title="Recent memories">
+      {memories.length > 0 ? (
+        <div className="space-y-2">
+          {memories.slice(0, 3).map((memory) => (
+            <div
+              key={memory.id}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5"
+            >
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <p className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-slate-100">
+                  {memory.title}
+                </p>
+                {memory.needs_review && (
+                  <span className="shrink-0 rounded-full border border-amber-300/20 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
+                    Review
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 truncate text-xs text-slate-500">
+                {formatMemoryMeta(memory)}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptySidebarNote text="No memories saved in this space yet." />
+      )}
+    </SidebarSection>
+  );
+}
+
+function formatMemoryMeta(memory: MemoryInsightMemory) {
+  const topic = memory.topic || "Untitled topic";
+  const status = memory.needs_review
+    ? "needs review"
+    : memory.confidence_status?.replace(/_/g, " ") || "new";
+
+  return `${topic} - ${status}`;
+}
+
+function ConnectionsSummary({ graphData }: { graphData: GraphData | null }) {
+  const issueEdges = (graphData?.edges ?? []).filter((edge) =>
+    ["contradicts", "duplicate_of", "near_duplicate"].includes(edge.type)
+  );
+  const linkCount = graphData?.edges.length ?? 0;
+
+  if (linkCount === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2.5">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-400">
+          <GitFork className="h-3.5 w-3.5 shrink-0 text-blue-300" aria-hidden="true" />
+          <span className="truncate">Memory links</span>
+        </span>
+        <span className="shrink-0 text-xs text-slate-500">{linkCount}</span>
+      </div>
+      <p
+        className={`mt-1 text-xs leading-5 ${
+          issueEdges.length > 0 ? "text-amber-100/80" : "text-slate-500"
+        }`}
+      >
+        {issueEdges.length > 0
+          ? `${issueEdges.length} link${issueEdges.length === 1 ? "" : "s"} need cleanup.`
+          : "Connections are being tracked quietly in the background."}
+      </p>
+    </div>
+  );
+}
+
+function EmptySidebarNote({ text }: { text: string }) {
+  return (
+    <p className="rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] px-3 py-3 text-xs leading-5 text-slate-500">
+      {text}
+    </p>
+  );
+}
+
+function SuggestedNextAction({
+  insights,
+  reviewItems,
+  onApplyPrompt,
+}: {
+  insights: MemoryInsights | null;
+  reviewItems: ReviewItem[];
+  onApplyPrompt: (prompt: string) => void;
+}) {
+  const recentTopic = insights?.recentMemories.find((memory) => memory.topic)
+    ?.topic;
+  const hasReviews = reviewItems.length > 0 || (insights?.needsReviewCount ?? 0) > 0;
+  const action = hasReviews
+    ? {
+        title: "Review one saved idea",
+        detail: "Ask the assistant to pick what needs attention first.",
+        prompt: "What should I review today from my saved memories?",
+        icon: ShieldAlert,
+      }
+    : (insights?.thisWeekCount ?? 0) > 0
+      ? {
+          title: "Summarize the week",
+          detail: "Turn this week's saved memories into a recap.",
+          prompt: "weekly summary",
+          icon: Sparkles,
+        }
+      : insights?.total
+        ? {
+            title: "Check a gap",
+            detail: "See whether your saved notes cover a topic.",
+            prompt: `Do I know about ${recentTopic || "RAG"}?`,
+            icon: MessageSquare,
+          }
+        : {
+            title: "Save one useful note",
+            detail: "Start with a small thing you learned today.",
+            prompt: "Remember: ",
+            icon: Brain,
+          };
+  const Icon = action.icon;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onApplyPrompt(action.prompt)}
+      className="group w-full rounded-2xl border border-blue-300/15 bg-blue-500/[0.07] p-3 text-left transition hover:bg-blue-500/[0.11] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+    >
+      <div className="flex items-start gap-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-400/[0.12] text-blue-100">
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold leading-5 text-slate-100">
+            {action.title}
+          </span>
+          <span className="mt-1 block text-xs leading-5 text-slate-400">
+            {action.detail}
+          </span>
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function ReviewQueue({
+  reviewItems,
+  onReviewAction,
+}: {
+  reviewItems: ReviewItem[];
+  onReviewAction: (
+    memoryId: string,
+    action: ReviewAction,
+    relationId?: string
+  ) => Promise<void>;
+}) {
+  const [pendingReviewKey, setPendingReviewKey] = useState<string | null>(null);
+
+  const runReviewAction = async (
+    memoryId: string,
+    action: ReviewAction,
+    relationId?: string
+  ) => {
+    if (pendingReviewKey) return;
+
+    const nextPendingKey = `${memoryId}:${action}:${relationId ?? "none"}`;
+    setPendingReviewKey(nextPendingKey);
+    try {
+      await onReviewAction(memoryId, action, relationId);
+    } finally {
+      setPendingReviewKey(null);
+    }
+  };
+
+  return (
+    <SidebarSection title="Needs review">
+      {reviewItems.length > 0 ? (
+        <div className="space-y-2.5">
+          {reviewItems.slice(0, 2).map((item) => {
+            const firstRelation = item.relations[0];
+            const confidence = item.memory.confidence_score ?? 50;
 
             return (
               <div
-                key={session.id}
-                className={`group flex min-w-0 items-stretch rounded-2xl border transition ${
-                  isActive
-                    ? "border-blue-400/[0.35] bg-blue-500/[0.12]"
-                    : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
-                }`}
+                key={item.memory.id}
+                className="min-w-0 rounded-xl border border-amber-300/15 bg-amber-400/[0.055] p-3"
               >
-                <button
-                  type="button"
-                  onClick={() => void onLoadSession(session.id)}
-                  disabled={isLoadingSession}
-                  className="min-w-0 flex-1 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-300"
-                >
-                  <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-100">
-                    <MessageSquare
-                      className={`h-4 w-4 shrink-0 ${
-                        isActive ? "text-blue-300" : "text-slate-500"
-                      }`}
-                      aria-hidden="true"
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-slate-100">
+                      {item.memory.title}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-amber-100/70">
+                      {item.primaryReason}
+                    </p>
+                  </div>
+                  <span
+                    title="Confidence score"
+                    className="shrink-0 rounded-full border border-white/10 bg-black/[0.14] px-2 py-1 text-[11px] font-semibold text-slate-300"
+                  >
+                    {confidence}
+                  </span>
+                </div>
+
+                {firstRelation?.relatedMemory?.title && (
+                  <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-amber-300/15 bg-black/[0.12] px-2.5 py-1.5 text-[11px] leading-4 text-amber-100/85">
+                    <GitFork className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 truncate">
+                      Linked: {firstRelation.relatedMemory.title}
+                    </span>
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <ReviewActionButton
+                    label="Got it"
+                    title="Mark remembered"
+                    icon={Check}
+                    variant="primary"
+                    loading={
+                      pendingReviewKey === `${item.memory.id}:remembered:none`
+                    }
+                    disabled={Boolean(pendingReviewKey)}
+                    onClick={() =>
+                      void runReviewAction(item.memory.id, "remembered")
+                    }
+                  />
+                  <ReviewActionButton
+                    label="Practice"
+                    title="Needs practice"
+                    icon={Clock3}
+                    variant="neutral"
+                    loading={
+                      pendingReviewKey ===
+                      `${item.memory.id}:needs_practice:none`
+                    }
+                    disabled={Boolean(pendingReviewKey)}
+                    onClick={() =>
+                      void runReviewAction(item.memory.id, "needs_practice")
+                    }
+                  />
+                  {firstRelation?.id && (
+                    <ReviewActionButton
+                      label="Resolve"
+                      title="Resolve duplicate or contradiction link"
+                      icon={Sparkles}
+                      variant="warning"
+                      loading={
+                        pendingReviewKey ===
+                        `${item.memory.id}:resolved:${firstRelation.id}`
+                      }
+                      disabled={Boolean(pendingReviewKey)}
+                      onClick={() =>
+                        void runReviewAction(
+                          item.memory.id,
+                          "resolved",
+                          firstRelation.id
+                        )
+                      }
                     />
-                    <span className="truncate">{session.title}</span>
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    {formatSessionTime(session.updated_at)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void onDeleteSession(session.id)}
-                  title="Delete session"
-                  className="flex w-10 shrink-0 items-center justify-center text-slate-600 opacity-100 transition hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-300 sm:opacity-0 sm:group-hover:opacity-100"
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
+                  )}
+                  <ReviewActionButton
+                    label="Archive"
+                    title="Archive memory"
+                    icon={Archive}
+                    variant="danger"
+                    loading={
+                      pendingReviewKey === `${item.memory.id}:archive:none`
+                    }
+                    disabled={Boolean(pendingReviewKey)}
+                    onClick={() => void runReviewAction(item.memory.id, "archive")}
+                  />
+                </div>
               </div>
             );
-          })
-        )}
-      </div>
-
-      <div className="border-t border-white/10 p-3">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
-            <Sparkles className="h-4 w-4 text-blue-300" aria-hidden="true" />
-            Memory ready
-          </div>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            Ask, save, or review code from one focused workspace.
-          </p>
+          })}
+          {reviewItems.length > 2 && (
+            <p className="px-1 text-xs leading-5 text-slate-500">
+              {reviewItems.length - 2} more item
+              {reviewItems.length - 2 === 1 ? "" : "s"} waiting.
+            </p>
+          )}
         </div>
-      </div>
-    </div>
+      ) : (
+        <EmptySidebarNote text="Nothing needs review right now." />
+      )}
+    </SidebarSection>
+  );
+}
+
+function ReviewActionButton({
+  label,
+  title,
+  icon: Icon,
+  onClick,
+  variant = "neutral",
+  loading = false,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  title: string;
+  icon: typeof Brain;
+  onClick: () => void;
+  variant?: "primary" | "neutral" | "warning" | "danger";
+  loading?: boolean;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const variantClassName =
+    variant === "primary"
+      ? "border-blue-300/20 bg-blue-500/[0.10] text-blue-100 hover:bg-blue-500/[0.16] focus-visible:outline-blue-300"
+      : variant === "warning"
+        ? "border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:bg-amber-400/[0.13] focus-visible:outline-amber-300"
+        : variant === "danger"
+          ? "border-red-300/15 bg-red-400/[0.06] text-red-100 hover:bg-red-400/[0.11] focus-visible:outline-red-300"
+          : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08] focus-visible:outline-blue-300";
+  const ButtonIcon = loading ? Loader2 : Icon;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${variantClassName} ${className}`}
+    >
+      <ButtonIcon
+        className={`h-3.5 w-3.5 shrink-0 ${loading ? "animate-spin" : ""}`}
+        aria-hidden="true"
+      />
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 
@@ -648,21 +1652,21 @@ function EmptyState({
 }) {
   const prompts = [
     {
-      label: "Remember a learning pattern",
+      label: "Save a learning note",
       eyebrow: "Memory",
       prompt: "Remember: spaced repetition helps me retain new concepts.",
       icon: Brain,
     },
     {
-      label: "Ask about energy conversion",
-      eyebrow: "Question",
-      prompt: "What do you know about energy conversion?",
+      label: "Check a knowledge gap",
+      eyebrow: "Gap",
+      prompt: "Do I know about RAG?",
       icon: MessageSquare,
     },
     {
-      label: "Review a short code snippet",
-      eyebrow: "Code",
-      prompt: "Review this code: function add(a, b) { return a + b; }",
+      label: "Teach from my brain",
+      eyebrow: "Teach",
+      prompt: "Teach me from my brain: embeddings",
       icon: Sparkles,
     },
   ];
@@ -807,6 +1811,10 @@ function ChatMessage({
           </time>
         </div>
 
+        {!isUser && message.metadata && (
+          <MessageBadges metadata={message.metadata} />
+        )}
+
         <div
           className={`message-copy min-w-0 text-base leading-7 ${
             isUser ? "text-white/95" : "text-slate-100"
@@ -832,6 +1840,76 @@ function ChatMessage({
     </article>
   );
 }
+
+function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
+  const badges: Array<{ label: string; tone: "blue" | "green" | "amber" | "red" | "slate" }> = [];
+  const relationTypes = metadata.relationTypes ?? [];
+
+  if (metadata.type === "teach_mode") badges.push({ label: "Teach mode", tone: "blue" });
+  if (metadata.type === "weekly_summary") {
+    badges.push({ label: "Weekly summary", tone: "blue" });
+  }
+
+  if (metadata.knowledgeStatus) {
+    const tone =
+      metadata.knowledgeStatus === "known"
+        ? "green"
+        : metadata.knowledgeStatus === "partial"
+          ? "amber"
+          : "slate";
+    badges.push({
+      label:
+        metadata.knowledgeStatus.charAt(0).toUpperCase() +
+        metadata.knowledgeStatus.slice(1),
+      tone,
+    });
+  }
+
+  if (metadata.saved) badges.push({ label: "Saved", tone: "green" });
+  if (metadata.indexed === false) badges.push({ label: "Index pending", tone: "amber" });
+  if (metadata.needsReview) badges.push({ label: "Needs review", tone: "amber" });
+  if (relationTypes.includes("contradicts")) {
+    badges.push({ label: "Contradiction", tone: "red" });
+  }
+  if (
+    relationTypes.includes("duplicate_of") ||
+    relationTypes.includes("near_duplicate")
+  ) {
+    badges.push({ label: "Duplicate link", tone: "amber" });
+  }
+  if (metadata.spaceName) {
+    badges.push({ label: metadata.spaceName, tone: "slate" });
+  }
+  if (metadata.topic) {
+    badges.push({ label: metadata.topic, tone: "blue" });
+  }
+  if (metadata.memoryCount !== undefined) {
+    badges.push({ label: `${metadata.memoryCount} memories`, tone: "slate" });
+  }
+
+  if (badges.length === 0) return null;
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      {badges.slice(0, 7).map((badge) => (
+        <span
+          key={`${badge.label}-${badge.tone}`}
+          className={`inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-5 ${badgeToneClasses[badge.tone]}`}
+        >
+          <span className="truncate">{badge.label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const badgeToneClasses = {
+  blue: "border-blue-300/25 bg-blue-400/10 text-blue-100",
+  green: "border-emerald-300/25 bg-emerald-400/10 text-emerald-100",
+  amber: "border-amber-300/25 bg-amber-400/10 text-amber-100",
+  red: "border-red-300/25 bg-red-400/10 text-red-100",
+  slate: "border-white/10 bg-white/[0.05] text-slate-200",
+};
 
 function createMarkdownComponents(isUser: boolean): Components {
   return {
