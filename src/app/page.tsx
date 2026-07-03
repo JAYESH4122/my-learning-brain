@@ -6,7 +6,6 @@ import type { CSSProperties, ReactNode } from "react";
 import type { Components } from "react-markdown";
 import {
   AlertCircle,
-  Archive,
   ArrowDown,
   Bot,
   Brain,
@@ -14,14 +13,12 @@ import {
   Clock3,
   Copy,
   GitFork,
-  Layers,
   Loader2,
   Menu,
   MessageSquare,
   Plus,
   Search,
   Send,
-  ShieldAlert,
   Sparkles,
   Trash2,
   User,
@@ -35,7 +32,6 @@ import remarkGfm from "remark-gfm";
 const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
 const USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
 const CURRENT_SESSION_KEY = "learning-brain-current-session";
-const CURRENT_SPACE_KEY = "learning-brain-current-space";
 const MAX_COMPOSER_HEIGHT = 164;
 const RECENT_INITIAL_COUNT = 3;
 const RECENT_BATCH_COUNT = 4;
@@ -73,12 +69,6 @@ interface ChatSession {
   updated_at: string;
 }
 
-interface Space {
-  id: string;
-  name: string;
-  description?: string | null;
-}
-
 interface MemoryInsightTopic {
   label: string;
   count: number;
@@ -97,8 +87,6 @@ interface MemoryInsightMemory {
 
 interface MemoryInsights {
   total: number;
-  needsReviewCount: number;
-  dueReviewCount: number;
   thisWeekCount?: number;
   topTopics: MemoryInsightTopic[];
   weakTopics: MemoryInsightTopic[];
@@ -121,26 +109,6 @@ interface GraphData {
     reason?: string | null;
   }>;
 }
-
-interface ReviewRelation {
-  id: string;
-  relation_type: string;
-  reason?: string | null;
-  relatedMemory?: MemoryInsightMemory | null;
-}
-
-interface ReviewItem {
-  memory: MemoryInsightMemory;
-  relations: ReviewRelation[];
-  primaryReason: string;
-}
-
-type ReviewAction =
-  | "remembered"
-  | "needs_practice"
-  | "resolved"
-  | "mastered"
-  | "archive";
 
 interface ApiChatMessage {
   id: string;
@@ -240,31 +208,6 @@ function createResponseMetadata(data: Record<string, unknown>): ResponseMetadata
   };
 }
 
-function isSetupSpaceId(spaceId: string | null | undefined) {
-  return Boolean(spaceId?.startsWith("setup-"));
-}
-
-function findSelectableSpace(
-  spaces: Space[],
-  spaceId: string | null | undefined,
-  allowSetupSpace: boolean
-) {
-  if (!spaceId || (!allowSetupSpace && isSetupSpaceId(spaceId))) return null;
-  return spaces.find((space) => space.id === spaceId) ?? null;
-}
-
-function findDefaultSpace(spaces: Space[], allowSetupSpace: boolean) {
-  const usableSpaces = allowSetupSpace
-    ? spaces
-    : spaces.filter((space) => !isSetupSpaceId(space.id));
-
-  return (
-    usableSpaces.find((space) => space.name.toLowerCase() === "general") ??
-    usableSpaces[0] ??
-    null
-  );
-}
-
 function prefersReducedMotion() {
   return (
     typeof window !== "undefined" &&
@@ -275,20 +218,16 @@ function prefersReducedMotion() {
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [spaces, setSpaces] = useState<Space[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [currentSpaceId, setCurrentSpaceId] = useState<string | null>(null);
   const [memorySearch, setMemorySearch] = useState("");
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
-  const [isLoadingSpaces, setIsLoadingSpaces] = useState(false);
   const [memoryInsights, setMemoryInsights] = useState<MemoryInsights | null>(
     null
   );
   const [graphData, setGraphData] = useState<GraphData | null>(null);
-  const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -349,82 +288,24 @@ export default function Home() {
     }
   }, []);
 
-  const loadSpaces = useCallback(async () => {
-    setIsLoadingSpaces(true);
-
-    try {
-      const response = await fetch(
-        `/api/spaces?userId=${encodeURIComponent(USER_ID)}`
-      );
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load spaces");
-      }
-
-      const loadedSpaces = (data.spaces ?? []) as Space[];
-      const allowSetupSpace = Boolean(data.setupRequired);
-      setSpaces(loadedSpaces);
-      if (data.setupRequired && typeof data.setupMessage === "string") {
-        setSetupMessage(data.setupMessage);
-      } else {
-        setSetupMessage(null);
-      }
-      setCurrentSpaceId((existingSpaceId) => {
-        const existingSpace = findSelectableSpace(
-          loadedSpaces,
-          existingSpaceId,
-          allowSetupSpace
-        );
-        const storedSpaceId = window.localStorage.getItem(CURRENT_SPACE_KEY);
-        const storedSpace = findSelectableSpace(
-          loadedSpaces,
-          storedSpaceId,
-          allowSetupSpace
-        );
-        const nextSpace =
-          existingSpace ??
-          storedSpace ??
-          findDefaultSpace(loadedSpaces, allowSetupSpace);
-
-        if (nextSpace && !isSetupSpaceId(nextSpace.id)) {
-          window.localStorage.setItem(CURRENT_SPACE_KEY, nextSpace.id);
-        } else {
-          window.localStorage.removeItem(CURRENT_SPACE_KEY);
-        }
-
-        return nextSpace?.id ?? null;
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load spaces");
-    } finally {
-      setIsLoadingSpaces(false);
-    }
-  }, []);
-
   const loadMemoryIntelligence = useCallback(async () => {
     const query = new URLSearchParams({
       userId: USER_ID,
       limit: "80",
     });
 
-    if (currentSpaceId && !isSetupSpaceId(currentSpaceId)) {
-      query.set("spaceId", currentSpaceId);
-    }
     if (memorySearch.trim()) {
       query.set("q", memorySearch.trim());
     }
 
     try {
-      const [memoriesResponse, graphResponse, reviewResponse] = await Promise.all([
+      const [memoriesResponse, graphResponse] = await Promise.all([
         fetch(`/api/memories?${query.toString()}`),
         fetch(`/api/graph?${query.toString()}`),
-        fetch(`/api/review?${query.toString()}`),
       ]);
-      const [memoriesData, graphResponseData, reviewData] = await Promise.all([
+      const [memoriesData, graphResponseData] = await Promise.all([
         memoriesResponse.json(),
         graphResponse.json(),
-        reviewResponse.json(),
       ]);
 
       if (!memoriesResponse.ok) {
@@ -435,25 +316,19 @@ export default function Home() {
         throw new Error(graphResponseData.error || "Failed to load graph");
       }
 
-      if (!reviewResponse.ok) {
-        throw new Error(reviewData.error || "Failed to load review queue");
-      }
-
       setMemoryInsights(memoriesData.insights ?? null);
       setGraphData(graphResponseData ?? null);
-      setReviewItems((reviewData.reviewItems ?? []) as ReviewItem[]);
       const nextSetupMessage =
         (typeof memoriesData.setupMessage === "string" &&
           memoriesData.setupMessage) ||
         (typeof graphResponseData.setupMessage === "string" &&
           graphResponseData.setupMessage) ||
-        (typeof reviewData.setupMessage === "string" && reviewData.setupMessage) ||
         null;
       if (nextSetupMessage) setSetupMessage(nextSetupMessage);
     } catch (err) {
       console.warn("Failed to load memory intelligence:", err);
     }
-  }, [currentSpaceId, memorySearch]);
+  }, [memorySearch]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     setIsLoadingSession(true);
@@ -491,21 +366,11 @@ export default function Home() {
 
   useEffect(() => {
     const run = async () => {
-      await loadSpaces();
-    };
-
-    void run();
-  }, [loadSpaces]);
-
-  useEffect(() => {
-    if (spaces.length === 0 && !currentSpaceId) return;
-
-    const run = async () => {
       await loadMemoryIntelligence();
     };
 
     void run();
-  }, [currentSpaceId, loadMemoryIntelligence, spaces.length]);
+  }, [loadMemoryIntelligence]);
 
   useEffect(() => {
     if (hasLoadedStoredSession.current) return;
@@ -545,7 +410,6 @@ export default function Home() {
           inputText: userMessage.content,
           userId: USER_ID,
           sessionId: currentSessionId,
-          spaceId: isSetupSpaceId(currentSpaceId) ? null : currentSpaceId,
         }),
       });
 
@@ -621,49 +485,6 @@ export default function Home() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const changeSpace = (spaceId: string) => {
-    setCurrentSpaceId(spaceId || null);
-    if (spaceId && !isSetupSpaceId(spaceId)) {
-      window.localStorage.setItem(CURRENT_SPACE_KEY, spaceId);
-    } else {
-      window.localStorage.removeItem(CURRENT_SPACE_KEY);
-    }
-  };
-
-  const handleReviewAction = async (
-    memoryId: string,
-    action: ReviewAction,
-    relationId?: string
-  ) => {
-    try {
-      const response = await fetch("/api/review", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: USER_ID,
-          memoryId,
-          action,
-          relationId,
-          resolution:
-            action === "resolved"
-              ? "Resolved from the review queue."
-              : undefined,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to update review item");
-      }
-
-      void loadMemoryIntelligence();
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to update review item"
-      );
-    }
-  };
-
   const deleteSession = async (sessionId: string) => {
     const shouldDelete = window.confirm("Delete this chat session?");
     if (!shouldDelete) return;
@@ -719,8 +540,6 @@ export default function Home() {
   const activeSessionTitle =
     sessions.find((session) => session.id === currentSessionId)?.title ??
     "Fresh thread";
-  const activeSpace = spaces.find((space) => space.id === currentSpaceId);
-  const activeSpaceName = activeSpace?.name ?? "General";
 
   return (
     <div className="app-stage h-[100dvh] overflow-hidden text-[#f7faff]">
@@ -729,19 +548,15 @@ export default function Home() {
           <SessionNavigation
             sessions={sessions}
             currentSessionId={currentSessionId}
-            activeSpaceName={activeSpaceName}
             memoryInsights={memoryInsights}
             graphData={graphData}
-            reviewItems={reviewItems}
             setupMessage={setupMessage}
             isLoadingSessions={isLoadingSessions}
             isLoadingSession={isLoadingSession}
-            isLoadingSpaces={isLoadingSpaces}
             onNewChat={startNewChat}
             onLoadSession={loadSession}
             onDeleteSession={deleteSession}
             onApplyPrompt={applyPrompt}
-            onReviewAction={handleReviewAction}
             memorySearch={memorySearch}
             onMemorySearchChange={setMemorySearch}
             formatSessionTime={formatSessionTime}
@@ -771,19 +586,15 @@ export default function Home() {
               <SessionNavigation
                 sessions={sessions}
                 currentSessionId={currentSessionId}
-                activeSpaceName={activeSpaceName}
                 memoryInsights={memoryInsights}
                 graphData={graphData}
-                reviewItems={reviewItems}
                 setupMessage={setupMessage}
                 isLoadingSessions={isLoadingSessions}
                 isLoadingSession={isLoadingSession}
-                isLoadingSpaces={isLoadingSpaces}
                 onNewChat={startNewChat}
                 onLoadSession={loadSession}
                 onDeleteSession={deleteSession}
                 onApplyPrompt={applyPrompt}
-                onReviewAction={handleReviewAction}
                 memorySearch={memorySearch}
                 onMemorySearchChange={setMemorySearch}
                 formatSessionTime={formatSessionTime}
@@ -825,26 +636,6 @@ export default function Home() {
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
-              <label htmlFor="space-select" className="sr-only">
-                Active space
-              </label>
-              <div className="flex h-10 max-w-[8.5rem] min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 text-slate-300 sm:max-w-[11rem] md:max-w-[14rem]">
-                <Layers className="h-4 w-4 shrink-0 text-blue-300" aria-hidden="true" />
-                <select
-                  id="space-select"
-                  value={currentSpaceId ?? ""}
-                  onChange={(event) => changeSpace(event.target.value)}
-                  disabled={isLoadingSpaces || spaces.length === 0}
-                  className="min-w-0 max-w-[5.5rem] bg-transparent text-sm font-medium text-slate-100 outline-none disabled:cursor-wait disabled:text-slate-500 sm:max-w-[8rem] md:max-w-[11rem]"
-                >
-                  {spaces.length === 0 && <option value="">General</option>}
-                  {spaces.map((space) => (
-                    <option key={space.id} value={space.id} className="bg-[#111827]">
-                      {space.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
               <button
                 type="button"
                 onClick={startNewChat}
@@ -955,42 +746,30 @@ export default function Home() {
 function SessionNavigation({
   sessions,
   currentSessionId,
-  activeSpaceName,
   memoryInsights,
   graphData,
-  reviewItems,
   setupMessage,
   isLoadingSessions,
   isLoadingSession,
-  isLoadingSpaces,
   onNewChat,
   onLoadSession,
   onDeleteSession,
   onApplyPrompt,
-  onReviewAction,
   memorySearch,
   onMemorySearchChange,
   formatSessionTime,
 }: {
   sessions: ChatSession[];
   currentSessionId: string | null;
-  activeSpaceName: string;
   memoryInsights: MemoryInsights | null;
   graphData: GraphData | null;
-  reviewItems: ReviewItem[];
   setupMessage: string | null;
   isLoadingSessions: boolean;
   isLoadingSession: boolean;
-  isLoadingSpaces: boolean;
   onNewChat: () => void;
   onLoadSession: (sessionId: string) => Promise<void>;
   onDeleteSession: (sessionId: string) => Promise<void>;
   onApplyPrompt: (prompt: string) => void;
-  onReviewAction: (
-    memoryId: string,
-    action: ReviewAction,
-    relationId?: string
-  ) => Promise<void>;
   memorySearch: string;
   onMemorySearchChange: (value: string) => void;
   formatSessionTime: (value: string) => string;
@@ -1159,14 +938,10 @@ function SessionNavigation({
         </div>
 
         <MemoryIntelligencePanel
-          activeSpaceName={activeSpaceName}
           insights={memoryInsights}
           graphData={graphData}
-          reviewItems={reviewItems}
           setupMessage={setupMessage}
-          isLoading={isLoadingSpaces}
           onApplyPrompt={onApplyPrompt}
-          onReviewAction={onReviewAction}
           memorySearch={memorySearch}
           onMemorySearchChange={onMemorySearchChange}
         />
@@ -1176,29 +951,17 @@ function SessionNavigation({
 }
 
 function MemoryIntelligencePanel({
-  activeSpaceName,
   insights,
   graphData,
-  reviewItems,
   setupMessage,
-  isLoading,
   onApplyPrompt,
-  onReviewAction,
   memorySearch,
   onMemorySearchChange,
 }: {
-  activeSpaceName: string;
   insights: MemoryInsights | null;
   graphData: GraphData | null;
-  reviewItems: ReviewItem[];
   setupMessage: string | null;
-  isLoading: boolean;
   onApplyPrompt: (prompt: string) => void;
-  onReviewAction: (
-    memoryId: string,
-    action: ReviewAction,
-    relationId?: string
-  ) => Promise<void>;
   memorySearch: string;
   onMemorySearchChange: (value: string) => void;
 }) {
@@ -1208,9 +971,7 @@ function MemoryIntelligencePanel({
         {setupMessage && <SetupNotice message={setupMessage} />}
 
         <LearningSnapshot
-          activeSpaceName={activeSpaceName}
           insights={insights}
-          isLoading={isLoading}
           onWeeklySummary={() => onApplyPrompt("weekly summary")}
         />
 
@@ -1224,14 +985,8 @@ function MemoryIntelligencePanel({
           searchQuery={memorySearch}
         />
 
-        <ReviewQueue
-          reviewItems={reviewItems}
-          onReviewAction={onReviewAction}
-        />
-
         <SuggestedNextAction
           insights={insights}
-          reviewItems={reviewItems}
           onApplyPrompt={onApplyPrompt}
         />
 
@@ -1242,14 +997,10 @@ function MemoryIntelligencePanel({
 }
 
 function LearningSnapshot({
-  activeSpaceName,
   insights,
-  isLoading,
   onWeeklySummary,
 }: {
-  activeSpaceName: string;
   insights: MemoryInsights | null;
-  isLoading: boolean;
   onWeeklySummary: () => void;
 }) {
   return (
@@ -1257,16 +1008,13 @@ function LearningSnapshot({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-            Learning space
+            Memory overview
           </p>
-          <div className="mt-1 flex min-w-0 items-center gap-2">
-            <Layers className="h-4 w-4 shrink-0 text-blue-300" aria-hidden="true" />
-            <span className="truncate text-sm font-semibold text-slate-100">
-              {activeSpaceName}
-            </span>
+          <div className="mt-1 text-sm font-semibold text-slate-100">
+            Auto-organized topics
           </div>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            {isLoading ? "Updating your memory view" : "Only this space is shown here"}
+            New notes are categorized automatically from what you write.
           </p>
         </div>
         <button
@@ -1288,10 +1036,9 @@ function LearningSnapshot({
           icon={Sparkles}
         />
         <MiniMetric
-          label="To review"
-          value={insights?.needsReviewCount ?? 0}
-          icon={ShieldAlert}
-          warn={(insights?.needsReviewCount ?? 0) > 0}
+          label="Topics"
+          value={insights?.topTopics.length ?? 0}
+          icon={MessageSquare}
         />
       </div>
     </section>
@@ -1399,16 +1146,9 @@ function RecentMemoriesList({
               key={memory.id}
               className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5"
             >
-              <div className="flex min-w-0 items-start justify-between gap-2">
-                <p className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-slate-100">
-                  {memory.title}
-                </p>
-                {memory.needs_review && (
-                  <span className="shrink-0 rounded-full border border-amber-300/20 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
-                    Review
-                  </span>
-                )}
-              </div>
+              <p className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-slate-100">
+                {memory.title}
+              </p>
               <p className="mt-1 truncate text-xs text-slate-500">
                 {formatMemoryMeta(memory)}
               </p>
@@ -1430,9 +1170,7 @@ function RecentMemoriesList({
 
 function formatMemoryMeta(memory: MemoryInsightMemory) {
   const topic = memory.topic || "Untitled topic";
-  const status = memory.needs_review
-    ? "needs review"
-    : memory.confidence_status?.replace(/_/g, " ") || "new";
+  const status = memory.confidence_status?.replace(/_/g, " ") || "new";
 
   return `${topic} - ${status}`;
 }
@@ -1477,24 +1215,15 @@ function EmptySidebarNote({ text }: { text: string }) {
 
 function SuggestedNextAction({
   insights,
-  reviewItems,
   onApplyPrompt,
 }: {
   insights: MemoryInsights | null;
-  reviewItems: ReviewItem[];
   onApplyPrompt: (prompt: string) => void;
 }) {
   const recentTopic = insights?.recentMemories.find((memory) => memory.topic)
     ?.topic;
-  const hasReviews = reviewItems.length > 0 || (insights?.needsReviewCount ?? 0) > 0;
-  const action = hasReviews
-    ? {
-        title: "Review one saved idea",
-        detail: "Ask the assistant to pick what needs attention first.",
-        prompt: "What should I review today from my saved memories?",
-        icon: ShieldAlert,
-      }
-    : (insights?.thisWeekCount ?? 0) > 0
+  const action =
+    (insights?.thisWeekCount ?? 0) > 0
       ? {
           title: "Summarize the week",
           detail: "Turn this week's saved memories into a recap.",
@@ -1539,197 +1268,6 @@ function SuggestedNextAction({
   );
 }
 
-function ReviewQueue({
-  reviewItems,
-  onReviewAction,
-}: {
-  reviewItems: ReviewItem[];
-  onReviewAction: (
-    memoryId: string,
-    action: ReviewAction,
-    relationId?: string
-  ) => Promise<void>;
-}) {
-  const [pendingReviewKey, setPendingReviewKey] = useState<string | null>(null);
-
-  const runReviewAction = async (
-    memoryId: string,
-    action: ReviewAction,
-    relationId?: string
-  ) => {
-    if (pendingReviewKey) return;
-
-    const nextPendingKey = `${memoryId}:${action}:${relationId ?? "none"}`;
-    setPendingReviewKey(nextPendingKey);
-    try {
-      await onReviewAction(memoryId, action, relationId);
-    } finally {
-      setPendingReviewKey(null);
-    }
-  };
-
-  return (
-    <SidebarSection title="Needs review">
-      {reviewItems.length > 0 ? (
-        <div className="space-y-2.5">
-          {reviewItems.slice(0, 2).map((item) => {
-            const firstRelation = item.relations[0];
-            const confidence = item.memory.confidence_score ?? 50;
-
-            return (
-              <div
-                key={item.memory.id}
-                className="min-w-0 rounded-xl border border-amber-300/15 bg-amber-400/[0.055] p-3"
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-slate-100">
-                      {item.memory.title}
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-amber-100/70">
-                      {item.primaryReason}
-                    </p>
-                  </div>
-                  <span
-                    title="Confidence score"
-                    className="shrink-0 rounded-full border border-white/10 bg-black/[0.14] px-2 py-1 text-[11px] font-semibold text-slate-300"
-                  >
-                    {confidence}
-                  </span>
-                </div>
-
-                {firstRelation?.relatedMemory?.title && (
-                  <div className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-amber-300/15 bg-black/[0.12] px-2.5 py-1.5 text-[11px] leading-4 text-amber-100/85">
-                    <GitFork className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span className="min-w-0 truncate">
-                      Linked: {firstRelation.relatedMemory.title}
-                    </span>
-                  </div>
-                )}
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <ReviewActionButton
-                    label="Got it"
-                    title="Mark remembered"
-                    icon={Check}
-                    variant="primary"
-                    loading={
-                      pendingReviewKey === `${item.memory.id}:remembered:none`
-                    }
-                    disabled={Boolean(pendingReviewKey)}
-                    onClick={() =>
-                      void runReviewAction(item.memory.id, "remembered")
-                    }
-                  />
-                  <ReviewActionButton
-                    label="Practice"
-                    title="Needs practice"
-                    icon={Clock3}
-                    variant="neutral"
-                    loading={
-                      pendingReviewKey ===
-                      `${item.memory.id}:needs_practice:none`
-                    }
-                    disabled={Boolean(pendingReviewKey)}
-                    onClick={() =>
-                      void runReviewAction(item.memory.id, "needs_practice")
-                    }
-                  />
-                  {firstRelation?.id && (
-                    <ReviewActionButton
-                      label="Resolve"
-                      title="Resolve duplicate or contradiction link"
-                      icon={Sparkles}
-                      variant="warning"
-                      loading={
-                        pendingReviewKey ===
-                        `${item.memory.id}:resolved:${firstRelation.id}`
-                      }
-                      disabled={Boolean(pendingReviewKey)}
-                      onClick={() =>
-                        void runReviewAction(
-                          item.memory.id,
-                          "resolved",
-                          firstRelation.id
-                        )
-                      }
-                    />
-                  )}
-                  <ReviewActionButton
-                    label="Archive"
-                    title="Archive memory"
-                    icon={Archive}
-                    variant="danger"
-                    loading={
-                      pendingReviewKey === `${item.memory.id}:archive:none`
-                    }
-                    disabled={Boolean(pendingReviewKey)}
-                    onClick={() => void runReviewAction(item.memory.id, "archive")}
-                  />
-                </div>
-              </div>
-            );
-          })}
-          {reviewItems.length > 2 && (
-            <p className="px-1 text-xs leading-5 text-slate-500">
-              {reviewItems.length - 2} more item
-              {reviewItems.length - 2 === 1 ? "" : "s"} waiting.
-            </p>
-          )}
-        </div>
-      ) : (
-        <EmptySidebarNote text="Nothing needs review right now." />
-      )}
-    </SidebarSection>
-  );
-}
-
-function ReviewActionButton({
-  label,
-  title,
-  icon: Icon,
-  onClick,
-  variant = "neutral",
-  loading = false,
-  disabled = false,
-  className = "",
-}: {
-  label: string;
-  title: string;
-  icon: typeof Brain;
-  onClick: () => void;
-  variant?: "primary" | "neutral" | "warning" | "danger";
-  loading?: boolean;
-  disabled?: boolean;
-  className?: string;
-}) {
-  const variantClassName =
-    variant === "primary"
-      ? "border-blue-300/20 bg-blue-500/[0.10] text-blue-100 hover:bg-blue-500/[0.16] focus-visible:outline-blue-300"
-      : variant === "warning"
-        ? "border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:bg-amber-400/[0.13] focus-visible:outline-amber-300"
-        : variant === "danger"
-          ? "border-red-300/15 bg-red-400/[0.06] text-red-100 hover:bg-red-400/[0.11] focus-visible:outline-red-300"
-          : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08] focus-visible:outline-blue-300";
-  const ButtonIcon = loading ? Loader2 : Icon;
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-      className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${variantClassName} ${className}`}
-    >
-      <ButtonIcon
-        className={`h-3.5 w-3.5 shrink-0 ${loading ? "animate-spin" : ""}`}
-        aria-hidden="true"
-      />
-      <span className="truncate">{label}</span>
-    </button>
-  );
-}
-
 function EmptyState({
   onSelectPrompt,
 }: {
@@ -1767,7 +1305,7 @@ function EmptyState({
           Learn, remember, and ask with less friction.
         </h2>
         <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">
-          Capture notes, ask from memory, or drop in code for a focused review.
+          Capture notes, ask from memory, and let the app organize topics for you.
         </p>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -1952,7 +1490,6 @@ function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
 
   if (metadata.saved) badges.push({ label: "Saved", tone: "green" });
   if (metadata.indexed === false) badges.push({ label: "Index pending", tone: "amber" });
-  if (metadata.needsReview) badges.push({ label: "Needs review", tone: "amber" });
   if (relationTypes.includes("contradicts")) {
     badges.push({ label: "Contradiction", tone: "red" });
   }

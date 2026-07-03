@@ -19,7 +19,6 @@ import {
   parseTeachTopic,
   truncateTitle,
 } from "@/src/lib/memoryUtils";
-import { CODE_REVIEW_PROMPT } from "@/src/prompts/codeReviewer";
 import { getPublicErrorMessage, isSchemaMissingError } from "@/src/lib/apiErrors";
 
 type BrainResponsePayload = Record<string, unknown>;
@@ -220,15 +219,11 @@ function buildSaveResponse(saveResult: SaveMemoryWithIntelligenceResult) {
   const issues = saveResult.relationTypes ?? [];
 
   if (issues.includes("contradicts")) {
-    return "Saved. I also found a possible contradiction with an older memory, so I marked this for review.";
+    return "Saved. I also found a possible contradiction with an older memory and linked the two notes together.";
   }
 
   if (issues.includes("duplicate_of") || issues.includes("near_duplicate")) {
-    return "Saved. This looks close to something already in your brain, so I linked it and marked it for review.";
-  }
-
-  if (saveResult.needsReview) {
-    return "Saved. I marked it for review because it may need cleanup or confirmation.";
+    return "Saved. This looks close to something already in your brain, so I linked the related notes together.";
   }
 
   if (!saveResult.saved && saveResult.saveError) {
@@ -277,34 +272,6 @@ export async function POST(req: Request) {
         sessionId: typeof sessionId === "string" ? sessionId : null,
       });
 
-    const lower = inputText.toLowerCase();
-    const containsCodeBlock = inputText.includes("```");
-    const isCodeReview =
-      lower.includes("review this code") ||
-      lower.includes("code review") ||
-      lower.includes("refactor this") ||
-      containsCodeBlock;
-
-    if (isCodeReview) {
-      const reviewPrompt = `
-${CODE_REVIEW_PROMPT}
-
-USER PROVIDED CODE:
-${inputText}
-
-Now perform the full code review based on the standards above.
-`;
-
-      const reviewResponse = await generateSummary(reviewPrompt);
-
-      return respond({
-        type: "code_review",
-        response: reviewResponse,
-        reviewed: true,
-        saved: false,
-      });
-    }
-
     try {
       await getSpaces(userId);
     } catch (setupError) {
@@ -312,7 +279,7 @@ Now perform the full code review based on the standards above.
         return respond({
           type: "setup_required",
           response:
-            "The app is running, but the new memory intelligence database migration has not been applied yet. Apply `supabase/migrations/20260623000000_memory_intelligence_layer.sql`, then refresh this page to use spaces, tagging, graph, review queue, teach mode, and weekly summaries.",
+            "The app is running, but the new memory intelligence database migration has not been applied yet. Apply `supabase/migrations/20260623000000_memory_intelligence_layer.sql`, then refresh this page to use automatic topic tagging, graph connections, teach mode, and weekly summaries.",
           saved: false,
           setupRequired: true,
         });
