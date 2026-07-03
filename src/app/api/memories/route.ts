@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/src/lib/supabaseClient";
+import { searchRelatedMemories } from "@/src/lib/memoryIntelligence";
 import { toDisplayTopicName } from "@/src/lib/memoryUtils";
 import { getErrorMessage, isSchemaMissingError } from "@/src/lib/apiErrors";
 
@@ -60,6 +61,7 @@ export async function GET(req: Request) {
     const topic = searchParams.get("topic");
     const status = searchParams.get("status");
     const needsReview = searchParams.get("needsReview");
+    const searchQuery = searchParams.get("q")?.trim();
     const includeArchived = searchParams.get("includeArchived") === "true";
     const limit = Math.min(Number(searchParams.get("limit") ?? 80), 120);
 
@@ -67,24 +69,59 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "userId is required" }, { status: 400 });
     }
 
-    let query = supabase
-      .from("memories")
-      .select(MEMORY_SELECT)
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(Number.isFinite(limit) ? limit : 80);
+    const effectiveLimit = Number.isFinite(limit) ? limit : 80;
+    let memories: Record<string, unknown>[];
 
-    if (!includeArchived) query = query.is("archived_at", null);
-    if (spaceId) query = query.eq("space_id", spaceId);
-    if (topic) query = query.ilike("topic", `%${topic}%`);
-    if (status) query = query.eq("confidence_status", status);
-    if (needsReview === "true") query = query.eq("needs_review", true);
-    if (needsReview === "false") query = query.eq("needs_review", false);
+    if (searchQuery) {
+      memories = (
+        await searchRelatedMemories({
+          inputText: searchQuery,
+          userId,
+          spaceId,
+          count: effectiveLimit,
+        })
+      ).map(asRecord);
 
-    const { data, error } = await query;
-    if (error) throw error;
+      if (!includeArchived) {
+        memories = memories.filter((memory) => !memory.archived_at);
+      }
+      if (topic) {
+        const topicLower = topic.toLowerCase();
+        memories = memories.filter((memory) =>
+          asString(memory.topic).toLowerCase().includes(topicLower)
+        );
+      }
+      if (status) {
+        memories = memories.filter(
+          (memory) => asString(memory.confidence_status) === status
+        );
+      }
+      if (needsReview === "true") {
+        memories = memories.filter((memory) => memory.needs_review === true);
+      }
+      if (needsReview === "false") {
+        memories = memories.filter((memory) => memory.needs_review === false);
+      }
+    } else {
+      let query = supabase
+        .from("memories")
+        .select(MEMORY_SELECT)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(effectiveLimit);
 
-    const memories = (data ?? []).map(asRecord);
+      if (!includeArchived) query = query.is("archived_at", null);
+      if (spaceId) query = query.eq("space_id", spaceId);
+      if (topic) query = query.ilike("topic", `%${topic}%`);
+      if (status) query = query.eq("confidence_status", status);
+      if (needsReview === "true") query = query.eq("needs_review", true);
+      if (needsReview === "false") query = query.eq("needs_review", false);
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      memories = (data ?? []).map(asRecord);
+    }
     const needsReviewMemories = memories.filter(
       (memory) => memory.needs_review === true
     );

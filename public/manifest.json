@@ -1,6 +1,6 @@
 {
-  "name": "My Learning Brain",
-  "short_name": "MyBrain",
+  "name": "BrainBank",
+  "short_name": "BrainBank",
   "description": "My personal knowledge base for code reviews and learnings.",
   "id": "/",
   "start_url": "/",

@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Andika } from "next/font/google";
 import "./globals.css";
 
-const APP_NAME = "My Learning Brain";
+const APP_NAME = "BrainBank";
 const APP_DESCRIPTION =
   "My personal knowledge base for code reviews and learnings.";
 const APP_THEME_COLOR = "#2563EB";

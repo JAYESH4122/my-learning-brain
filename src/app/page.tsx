@@ -19,6 +19,7 @@ import {
   Menu,
   MessageSquare,
   Plus,
+  Search,
   Send,
   ShieldAlert,
   Sparkles,
@@ -277,6 +278,7 @@ export default function Home() {
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSpaceId, setCurrentSpaceId] = useState<string | null>(null);
+  const [memorySearch, setMemorySearch] = useState("");
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
@@ -409,6 +411,9 @@ export default function Home() {
     if (currentSpaceId && !isSetupSpaceId(currentSpaceId)) {
       query.set("spaceId", currentSpaceId);
     }
+    if (memorySearch.trim()) {
+      query.set("q", memorySearch.trim());
+    }
 
     try {
       const [memoriesResponse, graphResponse, reviewResponse] = await Promise.all([
@@ -448,7 +453,7 @@ export default function Home() {
     } catch (err) {
       console.warn("Failed to load memory intelligence:", err);
     }
-  }, [currentSpaceId]);
+  }, [currentSpaceId, memorySearch]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     setIsLoadingSession(true);
@@ -477,16 +482,29 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void loadSessions();
+    const run = async () => {
+      await loadSessions();
+    };
+
+    void run();
   }, [loadSessions]);
 
   useEffect(() => {
-    void loadSpaces();
+    const run = async () => {
+      await loadSpaces();
+    };
+
+    void run();
   }, [loadSpaces]);
 
   useEffect(() => {
     if (spaces.length === 0 && !currentSpaceId) return;
-    void loadMemoryIntelligence();
+
+    const run = async () => {
+      await loadMemoryIntelligence();
+    };
+
+    void run();
   }, [currentSpaceId, loadMemoryIntelligence, spaces.length]);
 
   useEffect(() => {
@@ -495,7 +513,11 @@ export default function Home() {
 
     const storedSessionId = window.sessionStorage.getItem(CURRENT_SESSION_KEY);
     if (storedSessionId) {
-      void loadSession(storedSessionId);
+      const run = async () => {
+        await loadSession(storedSessionId);
+      };
+
+      void run();
     }
   }, [loadSession]);
 
@@ -720,6 +742,8 @@ export default function Home() {
             onDeleteSession={deleteSession}
             onApplyPrompt={applyPrompt}
             onReviewAction={handleReviewAction}
+            memorySearch={memorySearch}
+            onMemorySearchChange={setMemorySearch}
             formatSessionTime={formatSessionTime}
           />
         </aside>
@@ -760,6 +784,8 @@ export default function Home() {
                 onDeleteSession={deleteSession}
                 onApplyPrompt={applyPrompt}
                 onReviewAction={handleReviewAction}
+                memorySearch={memorySearch}
+                onMemorySearchChange={setMemorySearch}
                 formatSessionTime={formatSessionTime}
               />
             </aside>
@@ -793,7 +819,7 @@ export default function Home() {
                 <p className="mt-0.5 truncate text-xs text-slate-400 sm:text-sm">
                   {messages.length > 0
                     ? `${messages.length} message${messages.length !== 1 ? "s" : ""}`
-                    : "Learning Brain"}
+                    : "BrainBank"}
                 </p>
               </div>
             </div>
@@ -942,6 +968,8 @@ function SessionNavigation({
   onDeleteSession,
   onApplyPrompt,
   onReviewAction,
+  memorySearch,
+  onMemorySearchChange,
   formatSessionTime,
 }: {
   sessions: ChatSession[];
@@ -963,6 +991,8 @@ function SessionNavigation({
     action: ReviewAction,
     relationId?: string
   ) => Promise<void>;
+  memorySearch: string;
+  onMemorySearchChange: (value: string) => void;
   formatSessionTime: (value: string) => string;
 }) {
   const sessionListKey = sessions.map((session) => session.id).join("|");
@@ -997,7 +1027,7 @@ function SessionNavigation({
           </div>
           <div className="min-w-0">
             <p className="truncate text-base font-semibold text-white">
-              Learning Brain
+              BrainBank
             </p>
             <p className="mt-0.5 truncate text-xs text-slate-400">
               Personal memory assistant
@@ -1137,6 +1167,8 @@ function SessionNavigation({
           isLoading={isLoadingSpaces}
           onApplyPrompt={onApplyPrompt}
           onReviewAction={onReviewAction}
+          memorySearch={memorySearch}
+          onMemorySearchChange={onMemorySearchChange}
         />
       </div>
     </div>
@@ -1152,6 +1184,8 @@ function MemoryIntelligencePanel({
   isLoading,
   onApplyPrompt,
   onReviewAction,
+  memorySearch,
+  onMemorySearchChange,
 }: {
   activeSpaceName: string;
   insights: MemoryInsights | null;
@@ -1165,6 +1199,8 @@ function MemoryIntelligencePanel({
     action: ReviewAction,
     relationId?: string
   ) => Promise<void>;
+  memorySearch: string;
+  onMemorySearchChange: (value: string) => void;
 }) {
   return (
     <div className="border-t border-white/10 px-3 py-4">
@@ -1178,7 +1214,15 @@ function MemoryIntelligencePanel({
           onWeeklySummary={() => onApplyPrompt("weekly summary")}
         />
 
-        <RecentMemoriesList memories={insights?.recentMemories ?? []} />
+        <MemorySearchBox
+          value={memorySearch}
+          onChange={onMemorySearchChange}
+        />
+
+        <RecentMemoriesList
+          memories={insights?.recentMemories ?? []}
+          searchQuery={memorySearch}
+        />
 
         <ReviewQueue
           reviewItems={reviewItems}
@@ -1310,9 +1354,44 @@ function SidebarSection({
   );
 }
 
-function RecentMemoriesList({ memories }: { memories: MemoryInsightMemory[] }) {
+function MemorySearchBox({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
   return (
-    <SidebarSection title="Recent memories">
+    <div className="relative">
+      <label htmlFor="memory-search" className="sr-only">
+        Search saved memories
+      </label>
+      <Search
+        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+        aria-hidden="true"
+      />
+      <input
+        id="memory-search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Search memories..."
+        className="h-10 w-full rounded-xl border border-white/10 bg-white/[0.035] pl-9 pr-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-300/35 focus:bg-blue-500/[0.06]"
+      />
+    </div>
+  );
+}
+
+function RecentMemoriesList({
+  memories,
+  searchQuery,
+}: {
+  memories: MemoryInsightMemory[];
+  searchQuery: string;
+}) {
+  const isSearching = searchQuery.trim().length > 0;
+
+  return (
+    <SidebarSection title={isSearching ? "Memory matches" : "Recent memories"}>
       {memories.length > 0 ? (
         <div className="space-y-2">
           {memories.slice(0, 3).map((memory) => (
@@ -1337,7 +1416,13 @@ function RecentMemoriesList({ memories }: { memories: MemoryInsightMemory[] }) {
           ))}
         </div>
       ) : (
-        <EmptySidebarNote text="No memories saved in this space yet." />
+        <EmptySidebarNote
+          text={
+            isSearching
+              ? "No saved memories match that search."
+              : "No memories saved in this space yet."
+          }
+        />
       )}
     </SidebarSection>
   );
@@ -1762,7 +1847,7 @@ function ChatMessage({
   formatTime: (date: Date) => string;
 }) {
   const isUser = message.role === "user";
-  const roleLabel = isUser ? "You" : "Learning Brain";
+  const roleLabel = isUser ? "You" : "BrainBank";
   const metaLabel = isUser ? "Sent" : "Assistant";
 
   return (
