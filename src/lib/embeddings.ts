@@ -1,6 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+import { createGoogleAiClient } from "@/src/lib/googleAi";
 
 /**
  * @param text - The text to embed
@@ -8,6 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
  */
 
 export async function embedText(text: string): Promise<number[]> {
+  const ai = createGoogleAiClient();
   const response = await ai.models.embedContent({
     model: "gemini-embedding-001",
     contents: { parts: [{ text }] },

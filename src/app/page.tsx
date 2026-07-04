@@ -30,7 +30,9 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
 
 const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
-const USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
+const DEFAULT_DEMO_USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
+const USER_ID =
+  process.env.NEXT_PUBLIC_DEMO_USER_ID ?? DEFAULT_DEMO_USER_ID;
 const CURRENT_SESSION_KEY = "learning-brain-current-session";
 const MAX_COMPOSER_HEIGHT = 164;
 const RECENT_INITIAL_COUNT = 3;

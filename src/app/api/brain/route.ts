@@ -123,7 +123,7 @@ function isFallbackQuestion(inputText: string) {
   );
 }
 
-async function classifyInput(inputText: string) {
+async function classifyInput(inputText: string): Promise<IntentClassification> {
   const heuristicIntent = detectHeuristicIntent(inputText);
 
   if (heuristicIntent === "coaching") {
@@ -173,7 +173,7 @@ User input: "${inputText}"`;
         parsed.intent
       )
     ) {
-      return parsed;
+      return parsed as IntentClassification;
     }
   } catch (classificationError) {
     console.error("Error classifying input:", classificationError);

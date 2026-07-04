@@ -1,8 +1,4 @@
-import { GoogleGenAI, createUserContent } from "@google/genai";
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY,
-});
+import { createGoogleAiClient, createUserContent } from "@/src/lib/googleAi";
 
 /**
  * Generate a text summary using Gemini 2.5 Flash
@@ -10,6 +6,7 @@ const ai = new GoogleGenAI({
  */
 
 export async function generateSummary(prompt: string) {
+  const ai = createGoogleAiClient();
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: createUserContent(prompt),
@@ -28,6 +25,7 @@ export async function generateSummary(prompt: string) {
  */
 export async function generateWithWebSearch(question: string): Promise<string> {
   try {
+    const ai = createGoogleAiClient();
     // Use Gemini with enhanced prompt to leverage its knowledge base
     // Gemini models have access to current information up to their training data
     const enhancedPrompt = `Answer the following question clearly, accurately, and comprehensively. Use your knowledge base and provide detailed, helpful information. Be thorough and informative.
