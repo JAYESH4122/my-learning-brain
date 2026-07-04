@@ -1467,13 +1467,19 @@ function ChatMessage({
 function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
   const badges: Array<{ label: string; tone: "blue" | "green" | "amber" | "red" | "slate" }> = [];
   const relationTypes = metadata.relationTypes ?? [];
+  const showLearningModeBadges =
+    metadata.type === "teach_mode" ||
+    metadata.type === "knowledge_gap" ||
+    metadata.type === "weekly_summary";
+  const showMemorySystemBadges = metadata.type === "note";
 
   if (metadata.type === "teach_mode") badges.push({ label: "Teach mode", tone: "blue" });
+  if (metadata.type === "coaching") badges.push({ label: "Next steps", tone: "blue" });
   if (metadata.type === "weekly_summary") {
     badges.push({ label: "Weekly summary", tone: "blue" });
   }
 
-  if (metadata.knowledgeStatus) {
+  if (showLearningModeBadges && metadata.knowledgeStatus) {
     const tone =
       metadata.knowledgeStatus === "known"
         ? "green"
@@ -1488,24 +1494,31 @@ function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
     });
   }
 
-  if (metadata.saved) badges.push({ label: "Saved", tone: "green" });
-  if (metadata.indexed === false) badges.push({ label: "Index pending", tone: "amber" });
-  if (relationTypes.includes("contradicts")) {
+  if (showMemorySystemBadges && metadata.saved) {
+    badges.push({ label: "Saved", tone: "green" });
+  }
+  if (showMemorySystemBadges && metadata.indexed === false) {
+    badges.push({ label: "Index pending", tone: "amber" });
+  }
+  if (showMemorySystemBadges && relationTypes.includes("contradicts")) {
     badges.push({ label: "Contradiction", tone: "red" });
   }
   if (
-    relationTypes.includes("duplicate_of") ||
-    relationTypes.includes("near_duplicate")
+    showMemorySystemBadges &&
+    (
+      relationTypes.includes("duplicate_of") ||
+      relationTypes.includes("near_duplicate")
+    )
   ) {
     badges.push({ label: "Duplicate link", tone: "amber" });
   }
-  if (metadata.spaceName) {
+  if (showMemorySystemBadges && metadata.spaceName) {
     badges.push({ label: metadata.spaceName, tone: "slate" });
   }
-  if (metadata.topic) {
+  if (showMemorySystemBadges && metadata.topic) {
     badges.push({ label: metadata.topic, tone: "blue" });
   }
-  if (metadata.memoryCount !== undefined) {
+  if (showLearningModeBadges && metadata.memoryCount !== undefined) {
     badges.push({ label: `${metadata.memoryCount} memories`, tone: "slate" });
   }
 

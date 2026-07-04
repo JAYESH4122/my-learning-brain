@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Learning Brain | How It Fits Into Your Day</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #f7f1e8;
+        --bg-strong: #efe0cd;
+        --surface: rgba(255, 255, 255, 0.72);
+        --surface-strong: #fffdf9;
+        --ink: #201612;
+        --muted: #5f4d44;
+        --line: rgba(85, 56, 42, 0.12);
+        --accent: #b85c38;
+        --accent-deep: #8f3d21;
+        --accent-soft: #f2ccb4;
+        --leaf: #45695d;
+        --glow: 0 24px 60px rgba(75, 48, 34, 0.12);
+        --radius-xl: 32px;
+        --radius-lg: 22px;
+        --radius-md: 16px;
+        --radius-sm: 12px;
+        --max: 1180px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Outfit", "Segoe UI", "Helvetica Neue", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(255, 255, 255, 0.85), transparent 34%),
+          radial-gradient(circle at right 20%, rgba(184, 92, 56, 0.16), transparent 28%),
+          linear-gradient(180deg, #f9f4ec 0%, #f7f1e8 34%, #f1e7d9 100%);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(var(--max), calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: blur(16px);
+        background: rgba(247, 241, 232, 0.78);
+        border-bottom: 1px solid rgba(32, 22, 18, 0.08);
+      }
+
+      .topbar-inner {
+        width: min(var(--max), calc(100% - 40px));
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 0;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #d9774d, #8f3d21);
+        color: #fff;
+        box-shadow: 0 12px 24px rgba(143, 61, 33, 0.24);
+        font-size: 1.2rem;
+      }
+
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+
+      .nav a {
+        text-decoration: none;
+        color: var(--muted);
+        padding: 10px 14px;
+        border-radius: 999px;
+        transition: background 160ms ease, color 160ms ease;
+      }
+
+      .nav a:hover,
+      .nav a:focus-visible {
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--ink);
+        outline: none;
+      }
+
+      .hero {
+        padding: 72px 0 48px;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 32px;
+        align-items: center;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        font-family: "Outfit", "Segoe UI", "Helvetica Neue", sans-serif;
+        line-height: 0.98;
+      }
+
+      h1 {
+        font-size: clamp(3rem, 7vw, 6.2rem);
+        letter-spacing: -0.04em;
+      }
+
+      h2 {
+        font-size: clamp(2.2rem, 5vw, 3.5rem);
+        letter-spacing: -0.04em;
+        margin-bottom: 18px;
+      }
+
+      h3 {
+        font-size: 1.45rem;
+        letter-spacing: -0.03em;
+      }
+
+      .hero-copy p,
+      .section-intro,
+      .card p,
+      .scenario-story,
+      .comparison p,
+      .footer-note,
+      li {
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 1.02rem;
+      }
+
+      .hero-copy p {
+        font-size: 1.16rem;
+        max-width: 58ch;
+        margin: 18px 0 0;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 28px;
+      }
+
+      .button {
+        text-decoration: none;
+        border-radius: 999px;
+        padding: 14px 20px;
+        font-weight: 700;
+        transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+
+      .button-primary {
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+        box-shadow: 0 14px 28px rgba(143, 61, 33, 0.22);
+      }
+
+      .button-secondary {
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--ink);
+        border: 1px solid rgba(32, 22, 18, 0.08);
+      }
+
+      .button:hover,
+      .button:focus-visible {
+        transform: translateY(-2px);
+        outline: none;
+      }
+
+      .hero-panel,
+      .card,
+      .comparison,
+      .scenario-panel,
+      .quote,
+      .footer-panel {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        backdrop-filter: blur(18px);
+        box-shadow: var(--glow);
+      }
+
+      .hero-panel {
+        padding: 26px;
+        border-radius: var(--radius-xl);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero-panel::after {
+        content: "";
+        position: absolute;
+        inset: auto -18% -32% auto;
+        width: 220px;
+        height: 220px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(184, 92, 56, 0.22), transparent 68%);
+      }
+
+      .mini-app {
+        display: grid;
+        gap: 16px;
+      }
+
+      .mini-message {
+        border-radius: 18px;
+        padding: 16px 18px;
+        max-width: 84%;
+      }
+
+      .mini-message.user {
+        justify-self: end;
+        background: linear-gradient(135deg, #f6d8c4, #f2c3a3);
+      }
+
+      .mini-message.bot {
+        background: var(--surface-strong);
+      }
+
+      .mini-tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .mini-tag {
+        padding: 10px 12px;
+        border-radius: 999px;
+        background: rgba(69, 105, 93, 0.12);
+        color: var(--leaf);
+        font-size: 0.92rem;
+        font-weight: 700;
+      }
+
+      section {
+        padding: 34px 0 28px;
+      }
+
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 20px;
+        margin-bottom: 26px;
+      }
+
+      .section-intro {
+        max-width: 60ch;
+        margin: 0;
+      }
+
+      .grid-three,
+      .grid-two,
+      .comparison-grid {
+        display: grid;
+        gap: 20px;
+      }
+
+      .grid-three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .card {
+        border-radius: var(--radius-lg);
+        padding: 24px;
+      }
+
+      .eyeline {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--accent-deep);
+        font-weight: 700;
+        margin-bottom: 18px;
+      }
+
+      .flow {
+        display: grid;
+        gap: 16px;
+      }
+
+      .flow-step {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 16px;
+        padding: 20px;
+        border-radius: var(--radius-lg);
+        background: rgba(255, 255, 255, 0.64);
+        border: 1px solid rgba(32, 22, 18, 0.06);
+      }
+
+      .step-number {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .scenario-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .scenario-button {
+        appearance: none;
+        border: 0;
+        cursor: pointer;
+        padding: 12px 16px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--muted);
+        font: inherit;
+        font-weight: 700;
+        transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+      }
+
+      .scenario-button.active {
+        background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+        color: #fff;
+      }
+
+      .scenario-button:hover,
+      .scenario-button:focus-visible {
+        transform: translateY(-1px);
+        outline: none;
+      }
+
+      .scenario-panel {
+        border-radius: var(--radius-xl);
+        padding: 28px;
+      }
+
+      .scenario-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 16px 0 18px;
+      }
+
+      .scenario-meta span {
+        background: rgba(69, 105, 93, 0.12);
+        color: var(--leaf);
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 0.92rem;
+        font-weight: 700;
+      }
+
+      .scenario-story {
+        margin-bottom: 18px;
+      }
+
+      .scenario-list {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .comparison-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .comparison {
+        border-radius: var(--radius-xl);
+        padding: 28px;
+      }
+
+      .comparison strong {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 1.08rem;
+      }
+
+      .quote {
+        border-radius: var(--radius-xl);
+        padding: 28px;
+      }
+
+      .quote p {
+        font-size: clamp(1.3rem, 2.6vw, 2rem);
+        line-height: 1.34;
+        font-family: "Outfit", "Segoe UI", "Helvetica Neue", sans-serif;
+        font-weight: 600;
+        margin: 0 0 14px;
+      }
+
+      .quote small {
+        color: var(--muted);
+        font-size: 0.98rem;
+      }
+
+      .footer-panel {
+        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        padding: 30px;
+        margin-top: 24px;
+      }
+
+      .footer-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .footer-note {
+        margin-top: 16px;
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .grid-three,
+        .grid-two,
+        .comparison-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .section-head,
+        .topbar-inner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .shell,
+        .topbar-inner {
+          width: min(var(--max), calc(100% - 24px));
+        }
+
+        .hero {
+          padding-top: 48px;
+        }
+
+        .hero-panel,
+        .card,
+        .comparison,
+        .scenario-panel,
+        .quote,
+        .footer-panel {
+          padding: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body id="top">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <div class="brand-mark">B</div>
+          <div>
+            <div>My Learning Brain</div>
+            <small style="color: var(--muted)">A calm memory partner for everyday learning</small>
+          </div>
+        </div>
+        <nav class="nav" aria-label="Page sections">
+          <a href="#flow">How it flows</a>
+          <a href="#moments">Daily moments</a>
+          <a href="#scenarios">Real scenarios</a>
+          <a href="#difference">Why it helps</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="shell hero-grid">
+          <div class="hero-copy">
+            <div class="eyeline">Built for busy minds, not just busy schedules</div>
+            <h1>Your notes stop getting lost and start working for you.</h1>
+            <p>
+              My Learning Brain acts like a personal place to drop ideas, lessons,
+              reminders, and half-finished thoughts. Later, when you need them, it
+              brings them back in a useful way so you spend less time rethinking
+              what you already learned.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#flow">See the day-to-day flow</a>
+              <a class="button button-secondary" href="#scenarios">Jump to real-life examples</a>
+            </div>
+          </div>
+
+          <div class="hero-panel" aria-label="Example conversation">
+            <div class="mini-app">
+              <div class="mini-message user">
+                I just learned the client prefers short weekly summaries with action points.
+              </div>
+              <div class="mini-message bot">
+                Saved. Next time you prepare an update, I can bring that preference back so
+                you don’t have to remember it manually.
+              </div>
+              <div class="mini-tag-row">
+                <div class="mini-tag">Work habits</div>
+                <div class="mini-tag">Client preference</div>
+                <div class="mini-tag">Useful later</div>
+              </div>
+              <div class="mini-message user">
+                What should I keep in mind before today’s client update?
+              </div>
+              <div class="mini-message bot">
+                Keep it concise, lead with decisions, end with next steps, and avoid long
+                backstory. That matches what you saved earlier.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="moments">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <h2>Where it helps in real life</h2>
+            </div>
+            <p class="section-intro">
+              This is not only for “studying.” It fits into meetings, self-learning,
+              personal projects, job prep, creative work, and everyday routines where
+              useful things are easy to forget.
+            </p>
+          </div>
+
+          <div class="grid-three">
+            <article class="card">
+              <h3>During work</h3>
+              <p>
+                Save what your team cares about, what a manager prefers, what a client asked
+                for, or what went wrong last time. Later, ask for a quick reminder before you
+                act.
+              </p>
+            </article>
+            <article class="card">
+              <h3>During learning</h3>
+              <p>
+                Drop in concepts, explanations, examples, and little breakthroughs while you
+                learn. The app turns your scattered learning into something you can revisit
+                when your memory feels foggy.
+              </p>
+            </article>
+            <article class="card">
+              <h3>During life admin</h3>
+              <p>
+                Keep track of routines, decisions, preferences, and lessons from everyday
+                life. It helps when you want continuity without carrying everything in your
+                head.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="flow">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <h2>How the flow works</h2>
+            </div>
+            <p class="section-intro">
+              The heart of the app is simple: capture, remember, return, and improve.
+              You tell it what matters, and it helps you use that knowledge again when it
+              becomes relevant.
+            </p>
+          </div>
+
+          <div class="flow">
+            <article class="flow-step">
+              <div class="step-number">1</div>
+              <div>
+                <h3>Capture the moment</h3>
+                <p>
+                  Whenever you learn something useful, type it in naturally. It could be a
+                  meeting note, a lesson from a tutorial, a personal insight, or a reminder
+                  you want to keep.
+                </p>
+              </div>
+            </article>
+            <article class="flow-step">
+              <div class="step-number">2</div>
+              <div>
+                <h3>Let the app hold onto it</h3>
+                <p>
+                  Instead of asking you to build a perfect system first, the app quietly keeps
+                  the idea so you can move on with your day.
+                </p>
+              </div>
+            </article>
+            <article class="flow-step">
+              <div class="step-number">3</div>
+              <div>
+                <h3>Come back when you need support</h3>
+                <p>
+                  Ask a direct question like “What do I already know about this?” or “What
+                  should I remember before I start?” The app responds from what you saved,
+                  not from vague memory pressure.
+                </p>
+              </div>
+            </article>
+            <article class="flow-step">
+              <div class="step-number">4</div>
+              <div>
+                <h3>Spot the missing pieces</h3>
+                <p>
+                  Sometimes the most helpful answer is not what you know, but what you keep
+                  missing. The app can reveal weak spots so your next learning session is more
+                  focused.
+                </p>
+              </div>
+            </article>
+            <article class="flow-step">
+              <div class="step-number">5</div>
+              <div>
+                <h3>Build confidence over time</h3>
+                <p>
+                  As your saved ideas connect and come back into use, the app becomes less of a
+                  note pile and more of a steady thinking companion.
+                </p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="scenarios">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <h2>Real case scenarios</h2>
+            </div>
+            <p class="section-intro">
+              Use the buttons below to switch between different people and see how the app fits
+              into their day. This interaction pattern is a simple on-page switch that changes
+              the story without leaving the file.
+            </p>
+          </div>
+
+          <div class="scenario-tabs" role="tablist" aria-label="Scenario selector">
+            <button class="scenario-button active" data-scenario="professional" role="tab" aria-selected="true">
+              Working professional
+            </button>
+            <button class="scenario-button" data-scenario="student" role="tab" aria-selected="false">
+              Student
+            </button>
+            <button class="scenario-button" data-scenario="creator" role="tab" aria-selected="false">
+              Creator
+            </button>
+            <button class="scenario-button" data-scenario="jobseeker" role="tab" aria-selected="false">
+              Job seeker
+            </button>
+          </div>
+
+          <article class="scenario-panel" id="scenario-panel" aria-live="polite">
+            <h3 id="scenario-title">Working professional</h3>
+            <div class="scenario-meta" id="scenario-meta"></div>
+            <p class="scenario-story" id="scenario-story"></p>
+            <ul class="scenario-list" id="scenario-list"></ul>
+          </article>
+        </div>
+      </section>
+
+      <section id="difference">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <h2>What changes when you use it</h2>
+            </div>
+            <p class="section-intro">
+              The main shift is emotional as much as practical. You stop relying only on
+              memory recall under pressure and start working with a system that supports your
+              thinking.
+            </p>
+          </div>
+
+          <div class="comparison-grid">
+            <article class="comparison">
+              <strong>Without it</strong>
+              <p>
+                You know you learned something important, but you can’t find it, can’t recall
+                it fast enough, or end up relearning the same lesson from scratch.
+              </p>
+            </article>
+            <article class="comparison">
+              <strong>With it</strong>
+              <p>
+                You can ask for context before a meeting, refresh your understanding before a
+                task, and notice patterns in what you keep learning or forgetting.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell grid-two">
+          <article class="card">
+            <h3>What to put into the app</h3>
+            <ul>
+              <li>Things you want to remember from meetings or calls</li>
+              <li>Concepts you finally understood and want to keep</li>
+              <li>Personal rules of thumb that help you work better</li>
+              <li>Common mistakes you do not want to repeat</li>
+              <li>Useful preferences, patterns, and reminders from daily life</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Questions you might ask later</h3>
+            <ul>
+              <li>What do I already know about this topic?</li>
+              <li>What should I remember before I start this task?</li>
+              <li>What am I still unclear about here?</li>
+              <li>Can you give me a quick review before my meeting?</li>
+              <li>What patterns have I been learning lately?</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div class="shell">
+          <article class="quote">
+            <p>
+              “The value is not just storing information. The value is being supported at the
+              exact moment you need clarity.”
+            </p>
+            <small>
+              That is the central workflow: save now, benefit later, and reduce the mental
+              effort of keeping everything in your head.
+            </small>
+          </article>
+
+          <div class="footer-panel">
+            <h3>Open this file locally and explore it</h3>
+            <p class="footer-note">
+              This page is a standalone HTML file, so you can open it directly in a browser
+              and scroll through the full story. The design uses responsive design, which
+              means the layout adjusts cleanly on both large and small screens.
+            </p>
+            <div class="footer-actions">
+              <a class="button button-primary" href="#top" onclick="window.scrollTo({ top: 0, behavior: 'smooth' }); return false;">
+                Back to top
+              </a>
+              <a class="button button-secondary" href="#scenarios">Revisit scenarios</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const scenarios = {
+        professional: {
+          title: "Working professional",
+          meta: ["Before meetings", "Client context", "Less rework"],
+          story:
+            "You are juggling tasks, feedback, and decisions all week. Instead of digging through old chats and scattered notes, you save the important lessons once and ask for them again right when they matter.",
+          points: [
+            "Save client preferences after a call so you can prepare better next time.",
+            "Store lessons from a project mistake and revisit them before the next launch.",
+            "Ask for a short refresher before a review, update, or planning session."
+          ]
+        },
+        student: {
+          title: "Student",
+          meta: ["Study support", "Revision help", "Confidence building"],
+          story:
+            "You study a topic today, but next week the details feel blurry. This app becomes a place where your understanding stays available, so revision feels like reconnecting instead of starting over.",
+          points: [
+            "Save simple explanations in your own words after a class or tutorial.",
+            "Ask what you already know before starting revision for a chapter.",
+            "Use weak spots to decide what deserves extra attention before an exam."
+          ]
+        },
+        creator: {
+          title: "Creator",
+          meta: ["Ideas on tap", "Creative memory", "Pattern recall"],
+          story:
+            "Creative work often depends on ideas that arrive at inconvenient times. The app helps you catch them quickly and then return to them when you actually have time to build.",
+          points: [
+            "Save content ideas, hooks, themes, and audience reactions as they happen.",
+            "Ask for recurring patterns in what worked well before.",
+            "Pull back old concepts when you feel stuck or repetitive."
+          ]
+        },
+        jobseeker: {
+          title: "Job seeker",
+          meta: ["Interview prep", "Self-story", "Clearer recall"],
+          story:
+            "When preparing for interviews, it is easy to forget examples, achievements, and learning moments. The app helps keep your stories ready so your answers feel stronger and less rushed.",
+          points: [
+            "Save wins, project lessons, and role-specific examples as they come to mind.",
+            "Ask for a quick review before an interview or networking call.",
+            "Use it to notice which topics still need practice before applying."
+          ]
+        }
+      };
+
+      const buttons = document.querySelectorAll(".scenario-button");
+      const title = document.getElementById("scenario-title");
+      const meta = document.getElementById("scenario-meta");
+      const story = document.getElementById("scenario-story");
+      const list = document.getElementById("scenario-list");
+
+      function renderScenario(key) {
+        const scenario = scenarios[key];
+        title.textContent = scenario.title;
+        story.textContent = scenario.story;
+
+        meta.innerHTML = scenario.meta.map((item) => "<span>" + item + "</span>").join("");
+        list.innerHTML = scenario.points.map((item) => "<li>" + item + "</li>").join("");
+
+        buttons.forEach((button) => {
+          const active = button.dataset.scenario === key;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", active ? "true" : "false");
+        });
+      }
+
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          renderScenario(button.dataset.scenario);
+        });
+      });
+
+      renderScenario("professional");
+    </script>
+  </body>
+</html>

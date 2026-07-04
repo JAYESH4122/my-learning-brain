@@ -21,6 +21,13 @@ export type ReviewOutcome =
   | "resolved"
   | "mastered";
 
+export type HeuristicIntent =
+  | "coaching"
+  | "recall"
+  | "save"
+  | "acknowledgement"
+  | "chat";
+
 export function truncateTitle(title: string, maxLength = 60) {
   const cleaned = title.replace(/\s+/g, " ").trim();
   if (!cleaned) return "Untitled memory";
@@ -245,6 +252,48 @@ export function parseTeachTopic(input: string) {
   }
 
   return null;
+}
+
+export function detectHeuristicIntent(input: string): HeuristicIntent {
+  const trimmed = input.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (!trimmed) return "chat";
+
+  if (
+    /^(?:ok|okay|alright|so|bro|hey|hi|hello|hmm)[,\s]+/.test(lower) &&
+    /\b(what should i learn(?:\s+next|\s+now)?|what do i learn next|what should i study next|what should i focus on next)\b/.test(
+      lower
+    )
+  ) {
+    return "coaching";
+  }
+
+  if (
+    /\b(what should i learn(?:\s+next|\s+now)?|what do i learn next|what should i study next|what should i focus on next|what should i work on next)\b/.test(
+      lower
+    )
+  ) {
+    return "coaching";
+  }
+
+  if (parseKnowledgeTopic(trimmed) || parseTeachTopic(trimmed)) {
+    return "recall";
+  }
+
+  if (
+    /^(remember|save this|note this|store this)\b/i.test(trimmed) ||
+    /^i learned that\b/i.test(trimmed) ||
+    /^for future reference\b/i.test(trimmed)
+  ) {
+    return "save";
+  }
+
+  if (/^(no|yes|ok|okay|sure|nope|yep|cool|thanks|thank you)$/i.test(trimmed)) {
+    return "acknowledgement";
+  }
+
+  return "chat";
 }
 
 export function isWeeklySummaryCommand(input: string) {

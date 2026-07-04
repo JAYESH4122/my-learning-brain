@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectHeuristicIntent,
   extractJsonObject,
   computeReviewedConfidence,
   getWeekStartDate,
@@ -42,6 +43,20 @@ describe("memoryUtils", () => {
       "embeddings"
     );
     expect(parseTeachTopic("Teach me from my brain: Supabase")).toBe("Supabase");
+  });
+
+  it("detects coaching and save-oriented intents", () => {
+    expect(detectHeuristicIntent("ok bro what should i learn now")).toBe(
+      "coaching"
+    );
+    expect(detectHeuristicIntent("what should i focus on next")).toBe(
+      "coaching"
+    );
+    expect(detectHeuristicIntent("Do I know about embeddings?")).toBe("recall");
+    expect(detectHeuristicIntent("I learned that vector search improves recall")).toBe(
+      "save"
+    );
+    expect(detectHeuristicIntent("thanks")).toBe("acknowledgement");
   });
 
   it("detects weekly summary commands", () => {

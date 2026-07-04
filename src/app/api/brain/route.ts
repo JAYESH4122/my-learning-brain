@@ -14,6 +14,8 @@ import {
 } from "@/src/lib/memoryIntelligence";
 import { generateSummary, generateWithWebSearch } from "@/src/lib/gemini";
 import {
+  detectHeuristicIntent,
+  extractJsonObject,
   isWeeklySummaryCommand,
   parseKnowledgeTopic,
   parseTeachTopic,
@@ -22,6 +24,18 @@ import {
 import { getPublicErrorMessage, isSchemaMissingError } from "@/src/lib/apiErrors";
 
 type BrainResponsePayload = Record<string, unknown>;
+type AssistantIntent =
+  | "chat"
+  | "question"
+  | "save_memory"
+  | "coaching"
+  | "acknowledgement";
+
+interface IntentClassification {
+  intent: AssistantIntent;
+  confidence: number;
+  shouldSave: boolean;
+}
 
 function getErrorMessage(err: unknown) {
   if (err instanceof Error) return err.message;
@@ -110,40 +124,76 @@ function isFallbackQuestion(inputText: string) {
 }
 
 async function classifyInput(inputText: string) {
-  const classificationPrompt = `Analyze the following user input and determine if it is:
-1. A QUESTION - the user is asking something, seeking information, or wants to know about something
-2. A STATEMENT - the user is providing information, stating facts, or sharing knowledge to be stored
+  const heuristicIntent = detectHeuristicIntent(inputText);
 
-Examples of QUESTIONS:
-- "what is photosynthesis"
-- "tell me about dogs"
-- "do I know about RAG?"
-- "teach me from my brain: embeddings"
+  if (heuristicIntent === "coaching") {
+    return { intent: "coaching", confidence: 0.95, shouldSave: false };
+  }
 
-Examples of STATEMENTS:
-- "my name is John"
-- "I learned that photosynthesis converts light to energy"
-- "RAG retrieves context before generation"
+  if (heuristicIntent === "recall") {
+    return { intent: "question", confidence: 0.95, shouldSave: false };
+  }
 
-User input: "${inputText}"
+  if (heuristicIntent === "save") {
+    return { intent: "save_memory", confidence: 0.9, shouldSave: true };
+  }
 
-Respond with ONLY one word: "question" or "statement".`;
+  if (heuristicIntent === "acknowledgement") {
+    return { intent: "acknowledgement", confidence: 0.99, shouldSave: false };
+  }
+
+  const classificationPrompt = `Classify the user message for a personal learning assistant.
+
+Return strict JSON with:
+- intent: one of "chat", "question", "save_memory", "coaching", "acknowledgement"
+- confidence: a number from 0 to 1
+- shouldSave: true or false
+
+Guidance:
+- "coaching" is for prompts asking what to learn, study, or focus on next
+- "question" is for asking facts or asking from saved knowledge
+- "save_memory" is for information the user wants remembered
+- "chat" is for general conversation that should be answered naturally without saving
+- "acknowledgement" is for short replies like ok, thanks, yes
+- Casual wording like "ok bro what should i learn now" is "coaching", not "save_memory"
+- Do not save general chat unless the user clearly wants it remembered
+
+User input: "${inputText}"`;
 
   try {
-    const classification = (await generateSummary(classificationPrompt))
-      .trim()
-      .toLowerCase();
-    return classification.includes("question");
+    const rawClassification = await generateSummary(classificationPrompt);
+    const parsed = extractJsonObject<IntentClassification>(rawClassification);
+
+    if (
+      parsed &&
+      typeof parsed.intent === "string" &&
+      typeof parsed.confidence === "number" &&
+      typeof parsed.shouldSave === "boolean" &&
+      ["chat", "question", "save_memory", "coaching", "acknowledgement"].includes(
+        parsed.intent
+      )
+    ) {
+      return parsed;
+    }
   } catch (classificationError) {
     console.error("Error classifying input:", classificationError);
-    return isFallbackQuestion(inputText);
   }
+
+  return {
+    intent: isFallbackQuestion(inputText) ? "question" : "chat",
+    confidence: 0.45,
+    shouldSave: false,
+  };
 }
 
-function isVeryShortAcknowledgement(inputText: string, isQuestion: boolean) {
+function isVeryShortAcknowledgement(
+  inputText: string,
+  intent: AssistantIntent
+) {
   const trimmedInput = inputText.trim().toLowerCase();
   return (
-    !isQuestion &&
+    intent !== "question" &&
+    intent !== "coaching" &&
     (trimmedInput.length < 3 || /^(no|yes|ok|okay|sure|nope|yep)$/.test(trimmedInput))
   );
 }
@@ -156,31 +206,6 @@ function answerWasNotInStoredInfo(answer: string) {
     answerLower.includes("does not contain the answer") ||
     answerLower.includes("not in your stored")
   );
-}
-
-function extractQuestionTopic(inputText: string) {
-  const whatIsMatch = inputText.match(/\bwhat (?:is|are) (.+?)\??$/i);
-  if (whatIsMatch?.[1]) return whatIsMatch[1].trim();
-
-  const tellMeMatch = inputText.match(/\b(?:tell me about|explain|describe)\s+(.+?)\??$/i);
-  if (tellMeMatch?.[1]) return tellMeMatch[1].trim();
-
-  return truncateTitle(inputText, 48);
-}
-
-function createGeneratedMemoryBody(inputText: string, answer: string) {
-  const topic = extractQuestionTopic(inputText);
-  if (topic && topic.length < 80) {
-    return {
-      topic,
-      body: `AI-generated learning about ${topic}:\n\n${answer}`,
-    };
-  }
-
-  return {
-    topic: truncateTitle(inputText, 48),
-    body: `Q: ${inputText}\nA: ${answer}`,
-  };
 }
 
 async function answerFromStoredMemories(inputText: string, matches: MemoryMatch[]) {
@@ -209,6 +234,48 @@ Instructions:
 Answer:`;
 
   return generateSummary(answerPrompt);
+}
+
+async function buildCoachingResponse({
+  inputText,
+  relatedMemories,
+}: {
+  inputText: string;
+  relatedMemories: MemoryMatch[];
+}) {
+  const memoryContext =
+    relatedMemories.length > 0
+      ? formatMemoryContextForAdvice(relatedMemories)
+      : "No strong saved-memory context was found.";
+
+  const coachingPrompt = `You are a learning coach for the user's personal knowledge base.
+
+User message: ${inputText}
+
+Saved memory context:
+${memoryContext}
+
+Instructions:
+- Answer naturally like a thoughtful coach.
+- Recommend what they should learn next.
+- Prefer gaps, weak spots, or adjacent topics suggested by saved memories.
+- If memory context is thin, say that briefly and still give a sensible next-step recommendation.
+- Do not talk like a database or mention saving, contradictions, indexing, tags, or spaces.
+- Keep it concise and supportive.`;
+
+  return generateSummary(coachingPrompt);
+}
+
+function formatMemoryContextForAdvice(memories: MemoryMatch[]) {
+  return memories
+    .slice(0, 8)
+    .map(
+      (memory, index) =>
+        `Memory ${index + 1}\nTitle: ${memory.title}\nTopic: ${
+          memory.topic ?? "unknown"
+        }\nConfidence: ${memory.confidence_score}\nBody: ${memory.body}`
+    )
+    .join("\n\n");
 }
 
 function buildSaveResponse(saveResult: SaveMemoryWithIntelligenceResult) {
@@ -337,9 +404,13 @@ export async function POST(req: Request) {
       });
     }
 
-    const isQuestion = await classifyInput(inputText);
+    const classification = await classifyInput(inputText);
+    const isQuestion = classification.intent === "question";
 
-    if (isVeryShortAcknowledgement(inputText, isQuestion)) {
+    if (
+      classification.intent === "acknowledgement" ||
+      isVeryShortAcknowledgement(inputText, classification.intent)
+    ) {
       return respond({
         type: "note",
         response: "I understand. How can I help you?",
@@ -387,6 +458,29 @@ export async function POST(req: Request) {
       });
     }
 
+    if (classification.intent === "coaching") {
+      const relatedMemories = await searchRelatedMemories({
+        inputText,
+        userId,
+        spaceId: selectedSpaceId,
+        count: 12,
+      });
+
+      const coachingResponse = await buildCoachingResponse({
+        inputText,
+        relatedMemories,
+      });
+
+      return respond({
+        type: "coaching",
+        response: coachingResponse,
+        saved: false,
+        knowledgeStatus: relatedMemories.length > 0 ? "partial" : undefined,
+        relatedCount: relatedMemories.length,
+        topic: relatedMemories[0]?.topic ?? undefined,
+      });
+    }
+
     if (isQuestion) {
       const relatedMemories = await searchRelatedMemories({
         inputText,
@@ -415,13 +509,6 @@ export async function POST(req: Request) {
       }
 
       const answer = await generateWithWebSearch(inputText);
-      const generatedMemory = createGeneratedMemoryBody(inputText, answer);
-      const memorySave = await createGeneratedLearningMemory({
-        userId,
-        topic: generatedMemory.topic,
-        body: generatedMemory.body,
-        spaceId: selectedSpaceId,
-      });
 
       return respond({
         type: "question",
@@ -429,8 +516,19 @@ export async function POST(req: Request) {
         answer,
         known: false,
         knowledgeStatus: "unknown",
-        learned: true,
-        ...saveMetadata(memorySave),
+        learned: false,
+        saved: false,
+      });
+    }
+
+    if (classification.intent === "chat") {
+      const answer = await generateWithWebSearch(inputText);
+
+      return respond({
+        type: "chat",
+        response: answer,
+        answer,
+        saved: false,
       });
     }
 
