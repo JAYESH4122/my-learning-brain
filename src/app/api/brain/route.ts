@@ -471,13 +471,23 @@ export async function POST(req: Request) {
         relatedMemories,
       });
 
+      const goalSave = await saveMemoryWithIntelligence({
+        userId,
+        title: truncateTitle(inputText),
+        body: inputText,
+        memoryType: "note",
+        source: "user",
+        spaceId: selectedSpaceId,
+      });
+
       return respond({
         type: "coaching",
         response: coachingResponse,
-        saved: false,
+        saved: goalSave.memorySaved,
+        memoryId: goalSave.memoryId,
         knowledgeStatus: relatedMemories.length > 0 ? "partial" : undefined,
         relatedCount: relatedMemories.length,
-        topic: relatedMemories[0]?.topic ?? undefined,
+        topic: goalSave.topic ?? relatedMemories[0]?.topic ?? undefined,
       });
     }
 
