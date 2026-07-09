@@ -2,16 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
-import type { CSSProperties, ReactNode } from "react";
-import type { Components } from "react-markdown";
+import type { ReactNode } from "react";
 import {
   AlertCircle,
   ArrowDown,
   Bot,
   Brain,
-  Check,
   Clock3,
-  Copy,
   GitFork,
   Loader2,
   Menu,
@@ -24,12 +21,10 @@ import {
   User,
   X,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import remarkGfm from "remark-gfm";
-
-const syntaxHighlighterStyle = vscDarkPlus as Record<string, CSSProperties>;
+import { GenerativeUIRouter } from "@/src/components/generative-ui";
+import { SuggestedFollowUps } from "@/src/components/generative-ui/SuggestedFollowUps";
+import { MarkdownRenderer } from "@/src/components/shared/MarkdownRenderer";
+import type { GenerativeComponent, StandardChatData, CodeInspectorData, KnowledgeCheckData } from "@/src/components/generative-ui/types";
 const DEFAULT_DEMO_USER_ID = "54ad7274-ddff-4727-9ca0-84097b044c11";
 const USER_ID =
   process.env.NEXT_PUBLIC_DEMO_USER_ID ?? DEFAULT_DEMO_USER_ID;
@@ -54,6 +49,8 @@ interface ResponseMetadata {
   confidenceStatus?: string;
   relatedCount?: number;
   memoryCount?: number;
+  generativeUI?: GenerativeComponent;
+  suggestedFollowUps?: string[];
 }
 
 interface Message {
@@ -191,7 +188,67 @@ function getKnowledgeStatus(value: unknown): KnowledgeStatus | undefined {
     : undefined;
 }
 
+function parseGenerativeUI(data: Record<string, unknown>): GenerativeComponent | undefined {
+  const component = data.component;
+  const uiData = data.data;
+  if (typeof component !== "string" || !uiData || typeof uiData !== "object") return undefined;
+
+  if (component === "CODE_INSPECTOR") {
+    const d = uiData as Record<string, unknown>;
+    if (typeof d.summary === "string" && typeof d.updatedCode === "string") {
+      return {
+        component: "CODE_INSPECTOR",
+        data: {
+          summary: d.summary,
+          originalCode: typeof d.originalCode === "string" ? d.originalCode : "",
+          updatedCode: d.updatedCode,
+          language: typeof d.language === "string" ? d.language : "javascript",
+          improvements: Array.isArray(d.improvements) ? d.improvements.filter((i): i is string => typeof i === "string") : [],
+        },
+      };
+    }
+  }
+
+  if (component === "KNOWLEDGE_CHECK") {
+    const d = uiData as Record<string, unknown>;
+    if (typeof d.topic === "string" && typeof d.confidenceScore === "number") {
+      return {
+        component: "KNOWLEDGE_CHECK",
+        data: {
+          topic: d.topic,
+          confidenceScore: d.confidenceScore,
+          status: typeof d.status === "string" ? d.status : "new",
+          explanation: typeof d.explanation === "string" ? d.explanation : "",
+          relatedMemoriesCount: typeof d.relatedMemoriesCount === "number" ? d.relatedMemoriesCount : 0,
+        },
+      };
+    }
+  }
+
+  if (component === "STANDARD_CHAT") {
+    const d = uiData as Record<string, unknown>;
+    if (typeof d.text === "string") {
+      return {
+        component: "STANDARD_CHAT",
+        data: {
+          text: d.text,
+          isMemorySaved: typeof d.isMemorySaved === "boolean" ? d.isMemorySaved : false,
+          suggestedFollowUps: Array.isArray(d.suggestedFollowUps) ? d.suggestedFollowUps.filter((i): i is string => typeof i === "string") : [],
+        },
+      };
+    }
+  }
+
+  return undefined;
+}
+
 function createResponseMetadata(data: Record<string, unknown>): ResponseMetadata {
+  const generativeUI = parseGenerativeUI(data);
+  const uiData = data.data as Record<string, unknown> | undefined;
+  const suggestedFollowUps = uiData && Array.isArray((uiData as Record<string, unknown>).suggestedFollowUps)
+    ? ((uiData as Record<string, unknown>).suggestedFollowUps as unknown[]).filter((i): i is string => typeof i === "string")
+    : undefined;
+
   return {
     type: getString(data.type),
     saved: typeof data.saved === "boolean" ? data.saved : undefined,
@@ -207,6 +264,8 @@ function createResponseMetadata(data: Record<string, unknown>): ResponseMetadata
     confidenceStatus: getString(data.confidenceStatus),
     relatedCount: getNumber(data.relatedCount),
     memoryCount: getNumber(data.memoryCount),
+    generativeUI,
+    suggestedFollowUps,
   };
 }
 
@@ -226,9 +285,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
-  const [memoryInsights, setMemoryInsights] = useState<MemoryInsights | null>(
-    null
-  );
+  const [memoryInsights, setMemoryInsights] = useState<MemoryInsights | null>(null);
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [setupMessage, setSetupMessage] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -254,7 +311,6 @@ export default function Home() {
 
   useEffect(() => {
     if (messages.length === 0 && !isLoading) return;
-
     scrollToBottom(prefersReducedMotion() ? "auto" : "smooth");
   }, [messages.length, isLoading, scrollToBottom]);
 
@@ -263,25 +319,17 @@ export default function Home() {
     if (!textarea) return;
 
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(
-      textarea.scrollHeight,
-      MAX_COMPOSER_HEIGHT
-    )}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
   }, [input]);
 
   const loadSessions = useCallback(async () => {
     setIsLoadingSessions(true);
-
     try {
       const response = await fetch(
         `/api/chat-sessions?userId=${encodeURIComponent(USER_ID)}`
       );
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load sessions");
-      }
-
+      if (!response.ok) throw new Error(data.error || "Failed to load sessions");
       setSessions(data.sessions ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load sessions");
@@ -291,14 +339,8 @@ export default function Home() {
   }, []);
 
   const loadMemoryIntelligence = useCallback(async () => {
-    const query = new URLSearchParams({
-      userId: USER_ID,
-      limit: "80",
-    });
-
-    if (memorySearch.trim()) {
-      query.set("q", memorySearch.trim());
-    }
+    const query = new URLSearchParams({ userId: USER_ID, limit: "80" });
+    if (memorySearch.trim()) query.set("q", memorySearch.trim());
 
     try {
       const [memoriesResponse, graphResponse] = await Promise.all([
@@ -310,21 +352,16 @@ export default function Home() {
         graphResponse.json(),
       ]);
 
-      if (!memoriesResponse.ok) {
+      if (!memoriesResponse.ok)
         throw new Error(memoriesData.error || "Failed to load memory insights");
-      }
-
-      if (!graphResponse.ok) {
+      if (!graphResponse.ok)
         throw new Error(graphResponseData.error || "Failed to load graph");
-      }
 
       setMemoryInsights(memoriesData.insights ?? null);
       setGraphData(graphResponseData ?? null);
       const nextSetupMessage =
-        (typeof memoriesData.setupMessage === "string" &&
-          memoriesData.setupMessage) ||
-        (typeof graphResponseData.setupMessage === "string" &&
-          graphResponseData.setupMessage) ||
+        (typeof memoriesData.setupMessage === "string" && memoriesData.setupMessage) ||
+        (typeof graphResponseData.setupMessage === "string" && graphResponseData.setupMessage) ||
         null;
       if (nextSetupMessage) setSetupMessage(nextSetupMessage);
     } catch (err) {
@@ -335,16 +372,12 @@ export default function Home() {
   const loadSession = useCallback(async (sessionId: string) => {
     setIsLoadingSession(true);
     setError(null);
-
     try {
       const response = await fetch(
         `/api/chat-sessions/${sessionId}?userId=${encodeURIComponent(USER_ID)}`
       );
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load this session");
-      }
+      if (!response.ok) throw new Error(data.error || "Failed to load this session");
 
       setCurrentSessionId(data.session.id);
       setMessages(toChatMessages(data.messages ?? []));
@@ -359,19 +392,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const run = async () => {
-      await loadSessions();
-    };
-
-    void run();
+    void loadSessions();
   }, [loadSessions]);
 
   useEffect(() => {
-    const run = async () => {
-      await loadMemoryIntelligence();
-    };
-
-    void run();
+    void loadMemoryIntelligence();
   }, [loadMemoryIntelligence]);
 
   useEffect(() => {
@@ -379,13 +404,7 @@ export default function Home() {
     hasLoadedStoredSession.current = true;
 
     const storedSessionId = window.sessionStorage.getItem(CURRENT_SESSION_KEY);
-    if (storedSessionId) {
-      const run = async () => {
-        await loadSession(storedSessionId);
-      };
-
-      void run();
-    }
+    if (storedSessionId) void loadSession(storedSessionId);
   }, [loadSession]);
 
   const submitMessage = async () => {
@@ -428,8 +447,7 @@ export default function Home() {
       else if (typeof data.response === "string") responseText = data.response;
       else if (typeof data.answer === "string") responseText = data.answer;
       else if (typeof data.message === "string") responseText = data.message;
-      else
-        responseText = "I received your message. How can I help you further?";
+      else responseText = "I received your message. How can I help you further?";
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -446,9 +464,7 @@ export default function Home() {
 
       if (data.sessionSaved === false && data.sessionError) {
         setError(
-          `Answer returned, but the chat session was not saved: ${String(
-            data.sessionError
-          )}`
+          `Answer returned, but the chat session was not saved: ${String(data.sessionError)}`
         );
       }
 
@@ -497,56 +513,35 @@ export default function Home() {
         { method: "DELETE" }
       );
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to delete session");
 
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to delete session");
-      }
-
-      setSessions((prev) =>
-        prev.filter((session) => session.id !== sessionId)
-      );
-      if (currentSessionId === sessionId) {
-        startNewChat();
-      }
+      setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+      if (currentSessionId === sessionId) startNewChat();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete session");
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  const formatTime = (date: Date) =>
+    date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 
   const formatSessionTime = (value: string) => {
     const date = new Date(value);
     const today = new Date();
     const isToday = date.toDateString() === today.toDateString();
-
-    if (isToday) {
-      return date.toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
-
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    });
+    if (isToday)
+      return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
 
   const canSend = input.trim().length > 0 && !isLoading;
   const activeSessionTitle =
-    sessions.find((session) => session.id === currentSessionId)?.title ??
-    "Fresh thread";
+    sessions.find((session) => session.id === currentSessionId)?.title ?? "Fresh thread";
 
   return (
-    <div className="app-stage h-[100dvh] overflow-hidden text-[#f7faff]">
-      <div className="grid h-full min-w-0 grid-cols-1 overflow-hidden lg:grid-cols-[19rem_minmax(0,1fr)]">
-        <aside className="sidebar-panel hidden min-h-0 min-w-0 flex-col border-r border-white/10 lg:flex">
+    <div className="app-stage h-[100dvh] overflow-hidden text-[#0f0f0f]">
+      <div className="grid h-full min-w-0 grid-cols-1 overflow-hidden lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <aside className="sidebar-panel hidden min-h-0 min-w-0 flex-col border-r border-black/[0.07] lg:flex">
           <SessionNavigation
             sessions={sessions}
             currentSessionId={currentSessionId}
@@ -570,19 +565,19 @@ export default function Home() {
             <button
               type="button"
               aria-label="Close navigation"
-              className="absolute inset-0 bg-black/[0.58]"
+              className="absolute inset-0 bg-black/[0.24]"
               onClick={() => setIsSidebarOpen(false)}
             />
-            <aside className="sidebar-panel relative z-10 flex h-full w-[min(22rem,86vw)] flex-col border-r border-white/10 shadow-[28px_0_80px_rgba(0,0,0,0.42)]">
-              <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
-                <span className="text-sm font-semibold text-white">Menu</span>
+            <aside className="sidebar-panel relative z-10 flex h-full w-[min(22rem,86vw)] flex-col border-r border-black/[0.07] shadow-[4px_0_40px_rgba(0,0,0,0.12)]">
+              <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.07] px-4">
+                <span className="text-sm font-semibold text-[#0f0f0f]">Menu</span>
                 <button
                   type="button"
                   onClick={() => setIsSidebarOpen(false)}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6b6b6b] transition hover:bg-[#f0eeea] hover:text-[#0f0f0f]"
                   aria-label="Close menu"
                 >
-                  <X className="h-5 w-5" aria-hidden="true" />
+                  <X className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>
               <SessionNavigation
@@ -605,31 +600,25 @@ export default function Home() {
           </div>
         )}
 
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden px-3 pb-3 pt-3 sm:px-5 sm:pb-5 lg:px-6 lg:py-6">
-          <header className="nav-shell mb-3 flex h-14 shrink-0 items-center justify-between gap-3 rounded-2xl border border-white/10 px-3 shadow-[0_18px_60px_rgba(0,0,0,0.22)] sm:h-16 sm:px-4 lg:mb-4">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f8f7f4] px-3 pb-3 pt-3 sm:px-5 sm:pb-5 lg:px-6 lg:py-5">
+          <header className="nav-shell mb-3 flex h-13 shrink-0 items-center justify-between gap-3 rounded-2xl border border-black/[0.07] px-3 shadow-sm sm:h-14 sm:px-4 lg:mb-4">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
                 onClick={() => setIsSidebarOpen(true)}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white lg:hidden"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6b6b6b] transition hover:bg-[#f0eeea] hover:text-[#0f0f0f] lg:hidden"
                 aria-label="Open menu"
               >
-                <Menu className="h-5 w-5" aria-hidden="true" />
+                <Menu className="h-4 w-4" aria-hidden="true" />
               </button>
-              <div className="brand-mark hidden h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 sm:flex lg:hidden">
-                <Image
-                  src="/icons/icon-192.png"
-                  alt=""
-                  width={40}
-                  height={40}
-                  className="h-full w-full object-cover"
-                />
+              <div className="brand-mark hidden h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl sm:flex lg:hidden">
+                <Image src="/icons/icon-192.png" alt="" width={32} height={32} className="h-full w-full object-cover" />
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-sm font-semibold text-white sm:text-base">
+                <h1 className="truncate text-sm font-semibold text-[#0f0f0f]">
                   {activeSessionTitle}
                 </h1>
-                <p className="mt-0.5 truncate text-xs text-slate-400 sm:text-sm">
+                <p className="mt-0 truncate text-xs text-[#6b6b6b]">
                   {messages.length > 0
                     ? `${messages.length} message${messages.length !== 1 ? "s" : ""}`
                     : "BrainBank"}
@@ -637,47 +626,41 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={startNewChat}
-                className="nav-action inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-white shadow-[0_12px_38px_rgba(37,99,235,0.28)] transition active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
-              >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                <span className="hidden sm:inline">New chat</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={startNewChat}
+              className="nav-action inline-flex h-9 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-white transition active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">New chat</span>
+            </button>
           </header>
 
-          <section className="chat-shell relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-white/10 shadow-[0_24px_90px_rgba(0,0,0,0.28)]">
+          <section className="chat-shell relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-black/[0.07] shadow-sm">
             <div
               ref={messagesContainerRef}
               onScroll={updateBottomState}
-              className="messages-container chat-scroll flex-1 overflow-y-auto px-2.5 py-3 sm:px-6 sm:py-6"
+              className="messages-container chat-scroll flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6"
               aria-live="polite"
             >
               {messages.length === 0 ? (
                 <EmptyState onSelectPrompt={applyPrompt} />
               ) : (
-                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 sm:gap-5">
+                <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 sm:gap-5">
                   {messages.map((message) => (
-                    <ChatMessage
-                      key={message.id}
-                      message={message}
-                      formatTime={formatTime}
-                    />
+                    <ChatMessage key={message.id} message={message} formatTime={formatTime} onFollowUp={applyPrompt} />
                   ))}
                 </div>
               )}
 
               {isLoading && (
-                <div className="mx-auto mt-4 w-full max-w-4xl sm:mt-5">
+                <div className="mx-auto mt-4 w-full max-w-3xl sm:mt-5">
                   <TypingIndicator />
                 </div>
               )}
 
               {error && (
-                <div className="mx-auto mt-4 w-full max-w-4xl sm:mt-5">
+                <div className="mx-auto mt-4 w-full max-w-3xl sm:mt-5">
                   <ErrorMessage message={error} />
                 </div>
               )}
@@ -688,25 +671,21 @@ export default function Home() {
             {!isAtBottom && messages.length > 0 && (
               <button
                 type="button"
-                onClick={() =>
-                  scrollToBottom(prefersReducedMotion() ? "auto" : "smooth")
-                }
-                className="absolute bottom-28 left-1/2 z-10 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-[#121a2b]/95 px-3 text-sm font-medium text-blue-100 shadow-[0_16px_48px_rgba(0,0,0,0.32)] transition hover:border-blue-400/40 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 sm:bottom-32"
+                onClick={() => scrollToBottom(prefersReducedMotion() ? "auto" : "smooth")}
+                className="absolute bottom-28 left-1/2 z-10 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border border-black/[0.09] bg-white px-3 text-sm font-medium text-[#0f0f0f] shadow-sm transition hover:bg-[#f0eeea] active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black sm:bottom-32"
               >
                 <ArrowDown className="h-4 w-4" aria-hidden="true" />
                 Bottom
               </button>
             )}
 
-            <div className="composer-zone shrink-0 border-t border-white/10 px-2 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
+            <div className="composer-zone shrink-0 border-t border-black/[0.07] px-2 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 sm:px-5 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:pt-4">
               <form
                 onSubmit={handleSubmit}
-                className="composer-shell mx-auto flex w-full max-w-4xl items-end gap-1.5 rounded-2xl border border-white/10 p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.24)] sm:gap-2 sm:rounded-2xl"
+                className="composer-shell mx-auto flex w-full max-w-3xl items-end gap-1.5 rounded-2xl border border-black/[0.09] p-1.5 shadow-sm sm:gap-2"
               >
                 <div className="relative min-w-0 flex-1">
-                  <label htmlFor="chat-input" className="sr-only">
-                    Message
-                  </label>
+                  <label htmlFor="chat-input" className="sr-only">Message</label>
                   <textarea
                     id="chat-input"
                     ref={inputRef}
@@ -721,19 +700,19 @@ export default function Home() {
                         void submitMessage();
                       }
                     }}
-                    className="max-h-[164px] min-h-[42px] w-full resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2 pr-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-500 disabled:cursor-wait disabled:text-slate-500 sm:min-h-[46px] sm:rounded-[1rem] sm:py-2.5 sm:pr-4 sm:text-base"
+                    className="max-h-[164px] min-h-[40px] w-full resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2 text-sm leading-6 text-[#0f0f0f] outline-none transition placeholder:text-[#b0b0b0] disabled:cursor-wait disabled:opacity-50 sm:min-h-[44px] sm:py-2.5 sm:text-base"
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={!canSend}
                   aria-label={isLoading ? "Sending message" : "Send message"}
-                  className="send-button flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 sm:h-[46px] sm:w-[46px]"
+                  className="send-button flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-xl text-white transition active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-black/[0.08] disabled:text-[#b0b0b0] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black sm:h-[44px] sm:w-[44px]"
                 >
                   {isLoading ? (
-                    <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                   ) : (
-                    <Send className="h-5 w-5" aria-hidden="true" />
+                    <Send className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </form>
@@ -782,100 +761,82 @@ function SessionNavigation({
     key: sessionListKey,
   });
   const visibleSessionCount =
-    recentDisplay.key === sessionListKey
-      ? recentDisplay.count
-      : RECENT_INITIAL_COUNT;
+    recentDisplay.key === sessionListKey ? recentDisplay.count : RECENT_INITIAL_COUNT;
   const visibleSessions = sessions.slice(0, visibleSessionCount);
   const hiddenSessionCount = Math.max(sessions.length - visibleSessions.length, 0);
   const canShowFewerSessions = visibleSessionCount > RECENT_INITIAL_COUNT;
-  const nextSessionBatchCount = Math.min(
-    RECENT_BATCH_COUNT,
-    hiddenSessionCount
-  );
+  const nextSessionBatchCount = Math.min(RECENT_BATCH_COUNT, hiddenSessionCount);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b border-white/10 p-4">
+      <div className="border-b border-black/[0.07] p-4">
         <div className="flex items-center gap-3">
-          <div className="brand-mark flex h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-white/10 shadow-[0_14px_44px_rgba(37,99,235,0.18)]">
-            <Image
-              src="/icons/icon-192.png"
-              alt=""
-              width={44}
-              height={44}
-              className="h-full w-full object-cover"
-            />
+          <div className="brand-mark flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl">
+            <Image src="/icons/icon-192.png" alt="" width={36} height={36} className="h-full w-full object-cover" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-base font-semibold text-white">
-              BrainBank
-            </p>
-            <p className="mt-0.5 truncate text-xs text-slate-400">
-              Personal memory assistant
-            </p>
+            <p className="truncate text-sm font-semibold text-[#0f0f0f]">BrainBank</p>
+            <p className="mt-0 truncate text-xs text-[#6b6b6b]">Personal memory assistant</p>
           </div>
         </div>
 
         <button
           type="button"
           onClick={onNewChat}
-          className="nav-action mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl px-4 text-sm font-semibold text-white shadow-[0_14px_42px_rgba(37,99,235,0.24)] transition active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+          className="nav-action mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full px-4 text-sm font-medium text-white transition active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
         >
-          <Plus className="h-4 w-4" aria-hidden="true" />
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
           New chat
         </button>
       </div>
 
       <div className="messages-container min-h-0 flex-1 overflow-y-auto pb-3">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/5 bg-[#090d18]/95 px-4 pb-2 pt-4 backdrop-blur">
-          <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-            <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-black/[0.05] bg-white/95 px-4 pb-2 pt-3 backdrop-blur">
+          <h2 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#9b9b9b]">
+            <Clock3 className="h-3 w-3" aria-hidden="true" />
             Recent
           </h2>
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-400">
+          <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[11px] text-[#6b6b6b]">
             {sessions.length > RECENT_INITIAL_COUNT
               ? `${visibleSessions.length}/${sessions.length}`
               : sessions.length}
           </span>
         </div>
 
-        <div className="space-y-1 px-2 py-3">
+        <div className="space-y-0.5 px-2 py-2">
           {isLoadingSessions ? (
             <SessionLoading />
           ) : sessions.length === 0 ? (
-            <div className="mx-2 rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.03] px-3 py-4 text-sm leading-6 text-slate-400">
+            <div className="mx-2 rounded-xl border border-dashed border-black/[0.1] px-3 py-4 text-sm leading-6 text-[#9b9b9b]">
               No saved sessions yet. Start a chat and it will appear here.
             </div>
           ) : (
             <>
               {visibleSessions.map((session) => {
                 const isActive = session.id === currentSessionId;
-
                 return (
                   <div
                     key={session.id}
-                    className={`group flex min-w-0 items-stretch rounded-2xl border transition ${
+                    className={`group flex min-w-0 items-stretch rounded-xl transition ${
                       isActive
-                        ? "border-blue-400/[0.35] bg-blue-500/[0.12]"
-                        : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
+                        ? "bg-black/[0.06]"
+                        : "hover:bg-black/[0.03]"
                     }`}
                   >
                     <button
                       type="button"
                       onClick={() => void onLoadSession(session.id)}
                       disabled={isLoadingSession}
-                      className="min-w-0 flex-1 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-300"
+                      className="min-w-0 flex-1 px-3 py-2.5 text-left disabled:cursor-wait disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-black"
                     >
-                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-100">
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-[#0f0f0f]">
                         <MessageSquare
-                          className={`h-4 w-4 shrink-0 ${
-                            isActive ? "text-blue-300" : "text-slate-500"
-                          }`}
+                          className={`h-3.5 w-3.5 shrink-0 ${isActive ? "text-[#0f0f0f]" : "text-[#c0c0c0]"}`}
                           aria-hidden="true"
                         />
                         <span className="truncate">{session.title}</span>
                       </span>
-                      <span className="mt-1 block text-xs text-slate-500">
+                      <span className="mt-0.5 block text-xs text-[#9b9b9b]">
                         {formatSessionTime(session.updated_at)}
                       </span>
                     </button>
@@ -883,54 +844,42 @@ function SessionNavigation({
                       type="button"
                       onClick={() => void onDeleteSession(session.id)}
                       title="Delete session"
-                      className="flex w-10 shrink-0 items-center justify-center text-slate-600 opacity-100 transition hover:text-red-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-300 sm:opacity-0 sm:group-hover:opacity-100"
+                      className="flex w-9 shrink-0 items-center justify-center text-[#c0c0c0] opacity-100 transition hover:text-red-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-400 sm:opacity-0 sm:group-hover:opacity-100"
                     >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </div>
                 );
               })}
 
               {(hiddenSessionCount > 0 || canShowFewerSessions) && (
-                <div className="mt-2 space-y-2">
+                <div className="mt-1.5 space-y-1">
                   {hiddenSessionCount > 0 && (
                     <button
                       type="button"
                       onClick={() =>
                         setRecentDisplay({
-                          count: Math.min(
-                            visibleSessionCount + RECENT_BATCH_COUNT,
-                            sessions.length
-                          ),
+                          count: Math.min(visibleSessionCount + RECENT_BATCH_COUNT, sessions.length),
                           key: sessionListKey,
                         })
                       }
-                      className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-blue-300/30 hover:bg-blue-500/[0.08] hover:text-blue-100 active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                      className="flex min-h-9 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.08] px-3 py-1.5 text-xs font-medium text-[#6b6b6b] transition hover:bg-black/[0.04] hover:text-[#0f0f0f] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
                     >
-                      <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                      <ArrowDown className="h-3 w-3" aria-hidden="true" />
                       <span>Show {nextSessionBatchCount} more</span>
-                      <span className="font-normal text-slate-500">
-                        {hiddenSessionCount} left
-                      </span>
+                      <span className="text-[#c0c0c0]">{hiddenSessionCount} left</span>
                     </button>
                   )}
-
                   {canShowFewerSessions && (
                     <button
                       type="button"
                       onClick={() =>
-                        setRecentDisplay({
-                          count: RECENT_INITIAL_COUNT,
-                          key: sessionListKey,
-                        })
+                        setRecentDisplay({ count: RECENT_INITIAL_COUNT, key: sessionListKey })
                       }
-                      className="flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-400 transition hover:border-white/15 hover:bg-white/[0.04] hover:text-slate-100 active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+                      className="flex min-h-9 w-full items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-xs font-medium text-[#9b9b9b] transition hover:bg-black/[0.03] hover:text-[#0f0f0f] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
                     >
-                      <ArrowDown
-                        className="h-3.5 w-3.5 rotate-180"
-                        aria-hidden="true"
-                      />
-                      <span>Show less</span>
+                      <ArrowDown className="h-3 w-3 rotate-180" aria-hidden="true" />
+                      Show less
                     </button>
                   )}
                 </div>
@@ -968,30 +917,13 @@ function MemoryIntelligencePanel({
   onMemorySearchChange: (value: string) => void;
 }) {
   return (
-    <div className="border-t border-white/10 px-3 py-4">
-      <div className="space-y-4">
+    <div className="border-t border-black/[0.06] px-3 py-3">
+      <div className="space-y-3">
         {setupMessage && <SetupNotice message={setupMessage} />}
-
-        <LearningSnapshot
-          insights={insights}
-          onWeeklySummary={() => onApplyPrompt("weekly summary")}
-        />
-
-        <MemorySearchBox
-          value={memorySearch}
-          onChange={onMemorySearchChange}
-        />
-
-        <RecentMemoriesList
-          memories={insights?.recentMemories ?? []}
-          searchQuery={memorySearch}
-        />
-
-        <SuggestedNextAction
-          insights={insights}
-          onApplyPrompt={onApplyPrompt}
-        />
-
+        <LearningSnapshot insights={insights} onWeeklySummary={() => onApplyPrompt("weekly summary")} />
+        <MemorySearchBox value={memorySearch} onChange={onMemorySearchChange} />
+        <RecentMemoriesList memories={insights?.recentMemories ?? []} searchQuery={memorySearch} />
+        <SuggestedNextAction insights={insights} onApplyPrompt={onApplyPrompt} />
         <ConnectionsSummary graphData={graphData} />
       </div>
     </div>
@@ -1006,42 +938,34 @@ function LearningSnapshot({
   onWeeklySummary: () => void;
 }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+    <section className="rounded-xl border border-black/[0.07] bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9b9b9b]">
             Memory overview
           </p>
-          <div className="mt-1 text-sm font-semibold text-slate-100">
+          <div className="mt-0.5 text-sm font-semibold text-[#0f0f0f]">
             Auto-organized topics
           </div>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            New notes are categorized automatically from what you write.
+          <p className="mt-0.5 text-xs leading-5 text-[#9b9b9b]">
+            Notes are categorized automatically.
           </p>
         </div>
         <button
           type="button"
           onClick={onWeeklySummary}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-300/20 bg-blue-500/[0.10] text-blue-100 transition hover:bg-blue-500/[0.16] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/[0.09] bg-[#f0eeea] text-[#6b6b6b] transition hover:bg-black/[0.08] hover:text-[#0f0f0f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
           title="Generate weekly summary"
           aria-label="Generate weekly summary"
         >
-          <Sparkles className="h-4 w-4" aria-hidden="true" />
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-2">
+      <div className="mt-3 grid grid-cols-3 gap-1.5">
         <MiniMetric label="Saved" value={insights?.total ?? 0} icon={Brain} />
-        <MiniMetric
-          label="This week"
-          value={insights?.thisWeekCount ?? 0}
-          icon={Sparkles}
-        />
-        <MiniMetric
-          label="Topics"
-          value={insights?.topTopics.length ?? 0}
-          icon={MessageSquare}
-        />
+        <MiniMetric label="This week" value={insights?.thisWeekCount ?? 0} icon={Sparkles} />
+        <MiniMetric label="Topics" value={insights?.topTopics.length ?? 0} icon={MessageSquare} />
       </div>
     </section>
   );
@@ -1059,43 +983,33 @@ function MiniMetric({
   warn?: boolean;
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-white/10 bg-black/[0.12] px-2 py-2 text-center">
+    <div className="min-w-0 rounded-lg border border-black/[0.06] bg-[#f8f7f4] px-2 py-2 text-center">
       <Icon
-        className={`mx-auto h-3.5 w-3.5 ${
-          warn ? "text-amber-300" : "text-blue-300"
-        }`}
+        className={`mx-auto h-3 w-3 ${warn ? "text-amber-500" : "text-[#0f0f0f]"}`}
         aria-hidden="true"
       />
-      <div className="mt-1 text-sm font-semibold leading-none text-slate-100">
-        {value}
-      </div>
-      <div className="mt-1 truncate text-[10px] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold leading-none text-[#0f0f0f]">{value}</div>
+      <div className="mt-0.5 truncate text-[10px] text-[#9b9b9b]">{label}</div>
     </div>
   );
 }
 
 function SetupNotice({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3">
-      <div className="flex items-center gap-2 text-xs font-semibold text-amber-100">
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+      <div className="flex items-center gap-2 text-xs font-semibold text-amber-700">
         <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
         Database setup needed
       </div>
-      <p className="mt-1 text-xs leading-5 text-amber-100/80">{message}</p>
+      <p className="mt-1 text-xs leading-5 text-amber-600">{message}</p>
     </div>
   );
 }
 
-function SidebarSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
+function SidebarSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9b9b9b]">
         {title}
       </h3>
       {children}
@@ -1103,20 +1017,12 @@ function SidebarSection({
   );
 }
 
-function MemorySearchBox({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
+function MemorySearchBox({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
     <div className="relative">
-      <label htmlFor="memory-search" className="sr-only">
-        Search saved memories
-      </label>
+      <label htmlFor="memory-search" className="sr-only">Search saved memories</label>
       <Search
-        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#b0b0b0]"
         aria-hidden="true"
       />
       <input
@@ -1124,7 +1030,7 @@ function MemorySearchBox({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="Search memories..."
-        className="h-10 w-full rounded-xl border border-white/10 bg-white/[0.035] pl-9 pr-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-300/35 focus:bg-blue-500/[0.06]"
+        className="h-9 w-full rounded-xl border border-black/[0.08] bg-white pl-9 pr-3 text-sm text-[#0f0f0f] outline-none transition placeholder:text-[#c0c0c0] focus:border-black/[0.24] focus:ring-0"
       />
     </div>
   );
@@ -1142,16 +1048,16 @@ function RecentMemoriesList({
   return (
     <SidebarSection title={isSearching ? "Memory matches" : "Recent memories"}>
       {memories.length > 0 ? (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {memories.slice(0, 3).map((memory) => (
             <div
               key={memory.id}
-              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5"
+              className="rounded-xl border border-black/[0.07] bg-white px-3 py-2"
             >
-              <p className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-slate-100">
+              <p className="line-clamp-2 min-w-0 text-xs font-medium leading-5 text-[#0f0f0f]">
                 {memory.title}
               </p>
-              <p className="mt-1 truncate text-xs text-slate-500">
+              <p className="mt-0.5 truncate text-[11px] text-[#9b9b9b]">
                 {formatMemoryMeta(memory)}
               </p>
             </div>
@@ -1173,8 +1079,7 @@ function RecentMemoriesList({
 function formatMemoryMeta(memory: MemoryInsightMemory) {
   const topic = memory.topic || "Untitled topic";
   const status = memory.confidence_status?.replace(/_/g, " ") || "new";
-
-  return `${topic} - ${status}`;
+  return `${topic} · ${status}`;
 }
 
 function ConnectionsSummary({ graphData }: { graphData: GraphData | null }) {
@@ -1186,22 +1091,18 @@ function ConnectionsSummary({ graphData }: { graphData: GraphData | null }) {
   if (linkCount === 0) return null;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.025] px-3 py-2.5">
+    <div className="rounded-xl border border-black/[0.07] bg-white px-3 py-2.5">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-400">
-          <GitFork className="h-3.5 w-3.5 shrink-0 text-blue-300" aria-hidden="true" />
+        <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-[#6b6b6b]">
+          <GitFork className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span className="truncate">Memory links</span>
         </span>
-        <span className="shrink-0 text-xs text-slate-500">{linkCount}</span>
+        <span className="shrink-0 text-[11px] text-[#9b9b9b]">{linkCount}</span>
       </div>
-      <p
-        className={`mt-1 text-xs leading-5 ${
-          issueEdges.length > 0 ? "text-amber-100/80" : "text-slate-500"
-        }`}
-      >
+      <p className={`mt-1 text-xs leading-5 ${issueEdges.length > 0 ? "text-amber-600" : "text-[#9b9b9b]"}`}>
         {issueEdges.length > 0
           ? `${issueEdges.length} link${issueEdges.length === 1 ? "" : "s"} need cleanup.`
-          : "Connections are being tracked quietly in the background."}
+          : "Connections tracked quietly in the background."}
       </p>
     </div>
   );
@@ -1209,7 +1110,7 @@ function ConnectionsSummary({ graphData }: { graphData: GraphData | null }) {
 
 function EmptySidebarNote({ text }: { text: string }) {
   return (
-    <p className="rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] px-3 py-3 text-xs leading-5 text-slate-500">
+    <p className="rounded-xl border border-dashed border-black/[0.08] px-3 py-3 text-[11px] leading-5 text-[#9b9b9b]">
       {text}
     </p>
   );
@@ -1222,8 +1123,7 @@ function SuggestedNextAction({
   insights: MemoryInsights | null;
   onApplyPrompt: (prompt: string) => void;
 }) {
-  const recentTopic = insights?.recentMemories.find((memory) => memory.topic)
-    ?.topic;
+  const recentTopic = insights?.recentMemories.find((memory) => memory.topic)?.topic;
   const action =
     (insights?.thisWeekCount ?? 0) > 0
       ? {
@@ -1251,30 +1151,22 @@ function SuggestedNextAction({
     <button
       type="button"
       onClick={() => onApplyPrompt(action.prompt)}
-      className="group w-full rounded-2xl border border-blue-300/15 bg-blue-500/[0.07] p-3 text-left transition hover:bg-blue-500/[0.11] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+      className="group w-full rounded-xl border border-black/[0.07] bg-white p-3 text-left transition hover:bg-[#f8f7f4] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
     >
-      <div className="flex items-start gap-3">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-400/[0.12] text-blue-100">
-          <Icon className="h-4 w-4" aria-hidden="true" />
+      <div className="flex items-start gap-2.5">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black/[0.06] text-[#0f0f0f]">
+          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
         </span>
         <span className="min-w-0">
-          <span className="block text-sm font-semibold leading-5 text-slate-100">
-            {action.title}
-          </span>
-          <span className="mt-1 block text-xs leading-5 text-slate-400">
-            {action.detail}
-          </span>
+          <span className="block text-xs font-semibold leading-5 text-[#0f0f0f]">{action.title}</span>
+          <span className="mt-0.5 block text-[11px] leading-4 text-[#9b9b9b]">{action.detail}</span>
         </span>
       </div>
     </button>
   );
 }
 
-function EmptyState({
-  onSelectPrompt,
-}: {
-  onSelectPrompt: (prompt: string) => void;
-}) {
+function EmptyState({ onSelectPrompt }: { onSelectPrompt: (prompt: string) => void }) {
   const prompts = [
     {
       label: "Save a learning note",
@@ -1297,36 +1189,23 @@ function EmptyState({
   ];
 
   return (
-    <div className="mx-auto grid min-h-full w-full max-w-5xl items-center gap-7 px-1 py-3 sm:px-3 sm:py-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
-      <div className="message-enter order-2 max-w-2xl lg:order-1">
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-200">
-          <Sparkles className="h-3.5 w-3.5 text-blue-300" aria-hidden="true" />
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col items-center justify-center gap-8 px-1 py-8 sm:px-3 sm:py-12">
+      <div className="message-enter w-full text-center">
+        <div className="mx-auto mb-4 inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-medium text-[#6b6b6b]">
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
           Your learning space is ready
         </div>
-        <h2 className="text-3xl font-semibold leading-tight tracking-normal text-white sm:text-5xl">
-          Learn, remember, and ask with less friction.
+        <h2 className="text-3xl font-semibold leading-tight tracking-tight text-[#0f0f0f] sm:text-4xl">
+          Learn, remember,<br />and ask with less friction.
         </h2>
-        <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">
+        <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-[#6b6b6b] sm:text-base">
           Capture notes, ask from memory, and let the app organize topics for you.
         </p>
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+        <div className="mt-7 grid gap-3 sm:grid-cols-3">
           {prompts.map((item) => (
             <PromptCard key={item.label} item={item} onSelect={onSelectPrompt} />
           ))}
-        </div>
-      </div>
-
-      <div className="message-enter order-1 mx-auto w-full max-w-[18rem] lg:order-2 lg:max-w-none">
-        <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[#090d18] shadow-[0_28px_90px_rgba(37,99,235,0.18)]">
-          <Image
-            src="/generated/ai-companion.png"
-            alt=""
-            width={680}
-            height={680}
-            priority
-            className="aspect-square h-auto w-full"
-          />
         </div>
       </div>
     </div>
@@ -1337,12 +1216,7 @@ function PromptCard({
   item,
   onSelect,
 }: {
-  item: {
-    label: string;
-    eyebrow: string;
-    prompt: string;
-    icon: typeof Brain;
-  };
+  item: { label: string; eyebrow: string; prompt: string; icon: typeof Brain };
   onSelect: (prompt: string) => void;
 }) {
   const Icon = item.icon;
@@ -1351,15 +1225,15 @@ function PromptCard({
     <button
       type="button"
       onClick={() => onSelect(item.prompt)}
-      className="prompt-card message-enter group min-w-0 rounded-2xl border border-white/10 p-3.5 text-left transition hover:border-blue-400/[0.35] hover:bg-white/[0.06] active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300"
+      className="prompt-card message-enter group min-w-0 rounded-2xl border border-black/[0.08] p-4 text-left transition hover:border-black/[0.16] hover:shadow-sm active:scale-[0.99] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black"
     >
-      <span className="mb-4 flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/[0.12] text-blue-200 transition group-hover:bg-blue-500/[0.18]">
-        <Icon className="h-4 w-4" aria-hidden="true" />
+      <span className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/[0.06] text-[#0f0f0f] transition group-hover:bg-black/[0.09]">
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
-      <span className="block text-xs font-medium text-blue-300">
+      <span className="block text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9b9b9b]">
         {item.eyebrow}
       </span>
-      <span className="mt-1.5 block text-sm font-semibold leading-5 text-slate-100">
+      <span className="mt-1 block text-sm font-semibold leading-5 text-[#0f0f0f]">
         {item.label}
       </span>
     </button>
@@ -1368,11 +1242,11 @@ function PromptCard({
 
 function SessionLoading() {
   return (
-    <div className="space-y-2 px-2 py-1" aria-label="Loading sessions">
+    <div className="space-y-1.5 px-1 py-1" aria-label="Loading sessions">
       {[0, 1, 2].map((item) => (
         <div
           key={item}
-          className="h-[64px] animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]"
+          className="h-[56px] animate-pulse rounded-xl border border-black/[0.06] bg-black/[0.03]"
         />
       ))}
     </div>
@@ -1382,92 +1256,81 @@ function SessionLoading() {
 function ChatMessage({
   message,
   formatTime,
+  onFollowUp,
 }: {
   message: Message;
   formatTime: (date: Date) => string;
+  onFollowUp?: (prompt: string) => void;
 }) {
   const isUser = message.role === "user";
   const roleLabel = isUser ? "You" : "BrainBank";
   const metaLabel = isUser ? "Sent" : "Assistant";
+  const genUI = message.metadata?.generativeUI;
 
   return (
     <article
-      className={`message-enter flex min-w-0 items-end gap-2.5 sm:gap-3 ${
-        isUser ? "justify-end" : "justify-start"
-      }`}
+      className={`message-enter flex min-w-0 items-end gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}
     >
       {!isUser && (
         <div
-          className="assistant-avatar hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 shadow-[0_12px_34px_rgba(37,99,235,0.16)] sm:flex"
+          className="assistant-avatar hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/[0.08] text-[#0f0f0f] sm:flex"
           aria-hidden="true"
         >
-          <Bot className="h-5 w-5" />
+          <Bot className="h-4 w-4" />
         </div>
       )}
 
       <div
         className={`min-w-0 ${
           isUser
-            ? "max-w-[84%] rounded-[1.35rem] rounded-br-md border border-blue-300/20 bg-blue-600/95 px-3.5 py-3 text-white shadow-[0_14px_42px_rgba(37,99,235,0.22)] sm:max-w-[min(44rem,78%)] sm:px-4 sm:py-4"
-            : "max-w-full px-1 py-2 text-slate-100 sm:max-w-[min(44rem,78%)] sm:rounded-[1.35rem] sm:rounded-bl-md sm:border sm:border-white/[0.12] sm:bg-[#111827]/90 sm:px-4 sm:py-4 sm:shadow-[0_18px_52px_rgba(0,0,0,0.2)]"
+            ? "max-w-[84%] rounded-[1.25rem] rounded-br-md bg-[#0f0f0f] px-3.5 py-3 text-white shadow-sm sm:max-w-[min(44rem,78%)] sm:px-4 sm:py-3.5"
+            : "max-w-full px-1 py-1 text-[#0f0f0f] sm:max-w-[min(44rem,78%)] sm:rounded-[1.25rem] sm:rounded-bl-md sm:border sm:border-black/[0.07] sm:bg-white sm:px-4 sm:py-3.5 sm:shadow-sm"
         }`}
       >
         <div
-          className={`mb-2 hidden min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] sm:flex ${
-            isUser ? "text-blue-100/80" : "text-blue-200/80"
+          className={`mb-2 hidden min-w-0 items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] sm:flex ${
+            isUser ? "text-white/60" : "text-[#9b9b9b]"
           }`}
         >
           <span className="truncate">{roleLabel}</span>
-          <span
-            className={`h-1 w-1 shrink-0 rounded-full ${
-              isUser ? "bg-blue-100/50" : "bg-blue-300/60"
-            }`}
-            aria-hidden="true"
-          />
+          <span className={`h-1 w-1 shrink-0 rounded-full ${isUser ? "bg-white/40" : "bg-black/20"}`} aria-hidden="true" />
           <span className="shrink-0">{metaLabel}</span>
-          <span
-            className={`h-1 w-1 shrink-0 rounded-full ${
-              isUser ? "bg-blue-100/50" : "bg-blue-300/60"
-            }`}
-            aria-hidden="true"
-          />
+          <span className={`h-1 w-1 shrink-0 rounded-full ${isUser ? "bg-white/40" : "bg-black/20"}`} aria-hidden="true" />
           <time className="shrink-0" dateTime={message.timestamp.toISOString()}>
             {formatTime(message.timestamp)}
           </time>
         </div>
 
-        {!isUser && message.metadata && (
-          <MessageBadges metadata={message.metadata} />
+        {!isUser && message.metadata && <MessageBadges metadata={message.metadata} />}
+
+        {/* Generative UI rendering */}
+        {!isUser && genUI ? (
+          <GenerativeUIRouter genUI={genUI} fallbackContent={message.content} onFollowUp={onFollowUp} />
+        ) : (
+          <MarkdownRenderer content={message.content} isUser={isUser} />
         )}
 
-        <div
-          className={`message-copy min-w-0 text-base leading-7 ${
-            isUser ? "text-white/95" : "text-slate-100"
-          }`}
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={createMarkdownComponents(isUser)}
-          >
-            {message.content}
-          </ReactMarkdown>
-        </div>
+        {/* Suggested follow-ups for non-STANDARD_CHAT components */}
+        {!isUser && genUI && genUI.component !== "STANDARD_CHAT" && message.metadata?.suggestedFollowUps && message.metadata.suggestedFollowUps.length > 0 && onFollowUp && (
+          <SuggestedFollowUps items={message.metadata.suggestedFollowUps} onSelect={onFollowUp} />
+        )}
       </div>
 
       {isUser && (
         <div
-          className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-[0_12px_34px_rgba(37,99,235,0.26)] sm:flex"
+          className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#0f0f0f] text-white sm:flex"
           aria-hidden="true"
         >
-          <User className="h-5 w-5" />
+          <User className="h-4 w-4" />
         </div>
       )}
     </article>
   );
 }
 
+
 function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
-  const badges: Array<{ label: string; tone: "blue" | "green" | "amber" | "red" | "slate" }> = [];
+  const badges: Array<{ label: string; tone: "default" | "green" | "amber" | "red" }> = [];
   const relationTypes = metadata.relationTypes ?? [];
   const showLearningModeBadges =
     metadata.type === "teach_mode" ||
@@ -1475,63 +1338,38 @@ function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
     metadata.type === "weekly_summary";
   const showMemorySystemBadges = metadata.type === "note";
 
-  if (metadata.type === "teach_mode") badges.push({ label: "Teach mode", tone: "blue" });
-  if (metadata.type === "coaching") badges.push({ label: "Next steps", tone: "blue" });
-  if (metadata.type === "weekly_summary") {
-    badges.push({ label: "Weekly summary", tone: "blue" });
-  }
+  if (metadata.type === "teach_mode") badges.push({ label: "Teach mode", tone: "default" });
+  if (metadata.type === "coaching") badges.push({ label: "Next steps", tone: "default" });
+  if (metadata.type === "weekly_summary") badges.push({ label: "Weekly summary", tone: "default" });
 
   if (showLearningModeBadges && metadata.knowledgeStatus) {
     const tone =
-      metadata.knowledgeStatus === "known"
-        ? "green"
-        : metadata.knowledgeStatus === "partial"
-          ? "amber"
-          : "slate";
+      metadata.knowledgeStatus === "known" ? "green" :
+      metadata.knowledgeStatus === "partial" ? "amber" : "default";
     badges.push({
-      label:
-        metadata.knowledgeStatus.charAt(0).toUpperCase() +
-        metadata.knowledgeStatus.slice(1),
+      label: metadata.knowledgeStatus.charAt(0).toUpperCase() + metadata.knowledgeStatus.slice(1),
       tone,
     });
   }
 
-  if (showMemorySystemBadges && metadata.saved) {
-    badges.push({ label: "Saved", tone: "green" });
-  }
-  if (showMemorySystemBadges && metadata.indexed === false) {
-    badges.push({ label: "Index pending", tone: "amber" });
-  }
-  if (showMemorySystemBadges && relationTypes.includes("contradicts")) {
-    badges.push({ label: "Contradiction", tone: "red" });
-  }
-  if (
-    showMemorySystemBadges &&
-    (
-      relationTypes.includes("duplicate_of") ||
-      relationTypes.includes("near_duplicate")
-    )
-  ) {
+  if (showMemorySystemBadges && metadata.saved) badges.push({ label: "Saved", tone: "green" });
+  if (showMemorySystemBadges && metadata.indexed === false) badges.push({ label: "Index pending", tone: "amber" });
+  if (showMemorySystemBadges && relationTypes.includes("contradicts")) badges.push({ label: "Contradiction", tone: "red" });
+  if (showMemorySystemBadges && (relationTypes.includes("duplicate_of") || relationTypes.includes("near_duplicate")))
     badges.push({ label: "Duplicate link", tone: "amber" });
-  }
-  if (showMemorySystemBadges && metadata.spaceName) {
-    badges.push({ label: metadata.spaceName, tone: "slate" });
-  }
-  if (showMemorySystemBadges && metadata.topic) {
-    badges.push({ label: metadata.topic, tone: "blue" });
-  }
-  if (showLearningModeBadges && metadata.memoryCount !== undefined) {
-    badges.push({ label: `${metadata.memoryCount} memories`, tone: "slate" });
-  }
+  if (showMemorySystemBadges && metadata.spaceName) badges.push({ label: metadata.spaceName, tone: "default" });
+  if (showMemorySystemBadges && metadata.topic) badges.push({ label: metadata.topic, tone: "default" });
+  if (showLearningModeBadges && metadata.memoryCount !== undefined)
+    badges.push({ label: `${metadata.memoryCount} memories`, tone: "default" });
 
   if (badges.length === 0) return null;
 
   return (
-    <div className="mb-3 flex flex-wrap gap-1.5">
+    <div className="mb-2.5 flex flex-wrap gap-1.5">
       {badges.slice(0, 7).map((badge) => (
         <span
           key={`${badge.label}-${badge.tone}`}
-          className={`inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-5 ${badgeToneClasses[badge.tone]}`}
+          className={`inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-medium leading-5 ${badgeToneClasses[badge.tone]}`}
         >
           <span className="truncate">{badge.label}</span>
         </span>
@@ -1541,155 +1379,21 @@ function MessageBadges({ metadata }: { metadata: ResponseMetadata }) {
 }
 
 const badgeToneClasses = {
-  blue: "border-blue-300/25 bg-blue-400/10 text-blue-100",
-  green: "border-emerald-300/25 bg-emerald-400/10 text-emerald-100",
-  amber: "border-amber-300/25 bg-amber-400/10 text-amber-100",
-  red: "border-red-300/25 bg-red-400/10 text-red-100",
-  slate: "border-white/10 bg-white/[0.05] text-slate-200",
+  default: "border-black/[0.1] bg-black/[0.05] text-[#6b6b6b]",
+  green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+  red: "border-red-200 bg-red-50 text-red-700",
 };
 
-function createMarkdownComponents(isUser: boolean): Components {
-  return {
-    pre: ({ children }) => <>{children}</>,
-    code: ({ className, children }) => {
-      const match = /language-(\w+)/.exec(className || "");
-      const codeString = String(children).replace(/\n$/, "");
-      const language = match?.[1] ?? "text";
-      const isBlock = Boolean(match) || codeString.includes("\n");
-
-      if (isBlock) {
-        return <CodeBlock code={codeString} language={language} />;
-      }
-
-      return (
-        <code
-          className={`rounded-md px-1.5 py-0.5 font-mono text-[0.92em] ${
-            isUser
-              ? "bg-white/[0.14] text-white"
-              : "bg-blue-400/[0.12] text-blue-100"
-          }`}
-        >
-          {children}
-        </code>
-      );
-    },
-    p: ({ children }) => (
-      <p className="chat-markdown mb-3 leading-7 last:mb-0">{children}</p>
-    ),
-    h1: ({ children }) => (
-      <h1 className="chat-markdown mb-3 mt-1 text-xl font-bold leading-8 text-white first:mt-0">
-        {children}
-      </h1>
-    ),
-    h2: ({ children }) => (
-      <h2 className="chat-markdown mb-2.5 mt-4 text-lg font-bold leading-7 text-white first:mt-0">
-        {children}
-      </h2>
-    ),
-    h3: ({ children }) => (
-      <h3 className="chat-markdown mb-2 mt-3 text-base font-bold leading-7 text-slate-100 first:mt-0">
-        {children}
-      </h3>
-    ),
-    strong: ({ children }) => (
-      <strong
-        className={isUser ? "font-bold text-white" : "font-bold text-blue-100"}
-      >
-        {children}
-      </strong>
-    ),
-    ul: ({ children }) => (
-      <ul className="chat-markdown mb-3 ml-5 list-disc space-y-2 leading-7 marker:text-blue-300/80 last:mb-0">
-        {children}
-      </ul>
-    ),
-    ol: ({ children }) => (
-      <ol className="chat-markdown mb-3 ml-5 list-decimal space-y-2 leading-7 marker:text-blue-300/80 last:mb-0">
-        {children}
-      </ol>
-    ),
-    li: ({ children }) => <li className="pl-1">{children}</li>,
-    blockquote: ({ children }) => (
-      <blockquote
-        className={`chat-markdown my-3 rounded-r-2xl border-l-2 py-1 pl-3 leading-7 ${
-          isUser
-            ? "border-white/[0.4] bg-white/[0.08] text-white/[0.9]"
-            : "border-blue-300/[0.45] bg-white/[0.04] text-slate-300"
-        }`}
-      >
-        {children}
-      </blockquote>
-    ),
-    a: ({ href, children }) => (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`underline decoration-2 underline-offset-4 transition ${
-          isUser
-            ? "text-white decoration-white/[0.35] hover:decoration-white"
-            : "text-blue-300 decoration-blue-300/30 hover:decoration-blue-200"
-        }`}
-      >
-        {children}
-      </a>
-    ),
-    table: ({ children }) => (
-      <div className="my-3 max-w-full overflow-x-auto rounded-2xl border border-white/10">
-        <table className="w-full min-w-[34rem] table-auto border-collapse bg-[#111827] text-left text-sm text-slate-300">
-          {children}
-        </table>
-      </div>
-    ),
-    th: ({ children }) => (
-      <th className="break-words border-b border-white/10 bg-white/[0.04] px-3 py-2.5 font-bold text-slate-100">
-        {children}
-      </th>
-    ),
-    td: ({ children }) => (
-      <td className="break-words border-b border-white/10 px-3 py-2.5 align-top">
-        {children}
-      </td>
-    ),
-  };
-}
-
-function CodeBlock({ code, language }: { code: string; language: string }) {
-  return (
-    <div className="code-block my-4 max-w-full overflow-hidden rounded-lg border border-[#21352f] bg-[#08110f]">
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-white/10 bg-[#101b18] px-3 py-2">
-        <span className="min-w-0 truncate font-mono text-xs text-stone-300">
-          {language}
-        </span>
-        <CopyButton code={code} />
-      </div>
-      <SyntaxHighlighter
-        style={syntaxHighlighterStyle}
-        language={language}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          background: "#08110f",
-          padding: "1rem",
-          maxWidth: "100%",
-        }}
-        wrapLines
-        wrapLongLines
-      >
-        {code}
-      </SyntaxHighlighter>
-    </div>
-  );
-}
 
 function TypingIndicator() {
   return (
-    <div className="message-enter flex min-w-0 items-end gap-3">
-      <div className="assistant-avatar hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-blue-300/20 text-blue-100 sm:flex">
-        <Bot className="h-5 w-5" aria-hidden="true" />
+    <div className="message-enter flex min-w-0 items-end gap-2.5">
+      <div className="assistant-avatar hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/[0.08] text-[#0f0f0f] sm:flex">
+        <Bot className="h-4 w-4" aria-hidden="true" />
       </div>
-      <div className="px-1 py-2 sm:rounded-[1.35rem] sm:rounded-bl-md sm:border sm:border-white/10 sm:bg-[#111827]/90 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-3 text-base text-slate-400 sm:text-sm">
+      <div className="px-1 py-1 sm:rounded-[1.25rem] sm:rounded-bl-md sm:border sm:border-black/[0.07] sm:bg-white sm:px-4 sm:py-3">
+        <div className="flex items-center gap-2 text-sm text-[#9b9b9b]">
           <span className="flex gap-1.5" aria-hidden="true">
             <span className="typing-dot" />
             <span className="typing-dot [animation-delay:120ms]" />
@@ -1704,51 +1408,15 @@ function TypingIndicator() {
 
 function ErrorMessage({ message }: { message: string }) {
   return (
-    <div className="message-enter flex min-w-0 items-end gap-3" role="alert">
-      <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-red-500/[0.12] text-red-200 sm:flex">
-        <AlertCircle className="h-5 w-5" aria-hidden="true" />
+    <div className="message-enter flex min-w-0 items-end gap-2.5" role="alert">
+      <div className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500 sm:flex">
+        <AlertCircle className="h-4 w-4" aria-hidden="true" />
       </div>
-      <div className="min-w-0 max-w-full rounded-[1.35rem] border border-red-300/20 bg-red-500/10 px-3.5 py-3 text-red-100 sm:max-w-[min(42rem,78%)] sm:rounded-bl-md sm:px-5">
-        <p className="text-base font-bold sm:text-sm">Something went wrong</p>
-        <p className="mt-1 text-base leading-7 text-red-200/80 [overflow-wrap:anywhere] sm:text-sm sm:leading-6">
-          {message}
-        </p>
+      <div className="min-w-0 max-w-full rounded-[1.25rem] border border-red-200 bg-red-50 px-3.5 py-3 text-red-700 sm:max-w-[min(42rem,78%)] sm:rounded-bl-md sm:px-4">
+        <p className="text-sm font-semibold">Something went wrong</p>
+        <p className="mt-1 text-sm leading-6 text-red-600 [overflow-wrap:anywhere]">{message}</p>
       </div>
     </div>
   );
 }
 
-function CopyButton({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy code", err);
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={copyToClipboard}
-      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-stone-300 transition hover:bg-white/10 hover:text-white active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
-      title="Copy code"
-    >
-      {copied ? (
-        <>
-          <Check className="h-3.5 w-3.5 text-emerald-300" aria-hidden="true" />
-          <span className="hidden sm:inline">Copied</span>
-        </>
-      ) : (
-        <>
-          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="hidden sm:inline">Copy</span>
-        </>
-      )}
-    </button>
-  );
-}

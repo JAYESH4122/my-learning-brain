@@ -5,8 +5,8 @@ import "./globals.css";
 const APP_NAME = "BrainBank";
 const APP_DESCRIPTION =
   "My personal knowledge base for code reviews and learnings.";
-const APP_THEME_COLOR = "#2563EB";
-const APP_BACKGROUND_COLOR = "#070A12";
+const APP_THEME_COLOR = "#0f0f0f";
+const APP_BACKGROUND_COLOR = "#f8f7f4";
 
 const andika = Andika({
   weight: ["400", "700"],
@@ -20,7 +20,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: APP_THEME_COLOR,
-  colorScheme: "dark",
+  colorScheme: "light",
 };
 
 export const metadata: Metadata = {

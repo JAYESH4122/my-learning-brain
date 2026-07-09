@@ -319,6 +319,83 @@ function saveMetadata(saveResult: SaveMemoryWithIntelligenceResult) {
   };
 }
 
+function isCodeReviewRequest(inputText: string) {
+  const lower = inputText.trim().toLowerCase();
+  return (
+    lower.includes("review this code") ||
+    lower.includes("code review") ||
+    lower.includes("refactor this") ||
+    (lower.includes("```") && (lower.includes("review") || lower.includes("refactor") || lower.includes("fix this")))
+  );
+}
+
+function extractCodeFromInput(inputText: string) {
+  const codeBlockMatch = inputText.match(/```(\w*)\n?([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    return { language: codeBlockMatch[1] || "javascript", code: codeBlockMatch[2].trim() };
+  }
+  const lines = inputText.split("\n");
+  const codeLines = lines.filter(
+    (line) =>
+      line.startsWith("  ") ||
+      line.startsWith("\t") ||
+      /^(const|let|var|function|class|import|export|if|for|while|return|async|await)/.test(line.trim())
+  );
+  if (codeLines.length > 1) {
+    return { language: "javascript", code: codeLines.join("\n") };
+  }
+  return null;
+}
+
+async function buildCodeReviewResponse(inputText: string) {
+  const extracted = extractCodeFromInput(inputText);
+  const codeSnippet = extracted?.code ?? inputText;
+  const language = extracted?.language ?? "javascript";
+
+  const reviewPrompt = `Review and improve this code. Return ONLY a valid JSON object (no markdown, no explanation outside JSON):
+{
+  "summary": "Brief 1-line summary of the main issue or improvement",
+  "originalCode": "the original code exactly as given",
+  "updatedCode": "the improved/refactored version",
+  "language": "${language}",
+  "improvements": ["improvement 1", "improvement 2"]
+}
+
+Code to review:
+${codeSnippet}`;
+
+  const raw = await generateSummary(reviewPrompt);
+  const parsed = extractJsonObject<{
+    summary: string;
+    originalCode: string;
+    updatedCode: string;
+    language: string;
+    improvements: string[];
+  }>(raw);
+
+  if (parsed && parsed.summary && parsed.updatedCode) {
+    return {
+      component: "CODE_INSPECTOR" as const,
+      data: {
+        summary: parsed.summary,
+        originalCode: parsed.originalCode || codeSnippet,
+        updatedCode: parsed.updatedCode,
+        language: parsed.language || language,
+        improvements: parsed.improvements || [],
+      },
+    };
+  }
+
+  return {
+    component: "STANDARD_CHAT" as const,
+    data: {
+      text: raw,
+      isMemorySaved: false,
+      suggestedFollowUps: ["Can you explain this further?", "Save this review"],
+    },
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const { inputText, userId, sessionId, spaceId } = await req.json();
@@ -344,15 +421,31 @@ export async function POST(req: Request) {
     } catch (setupError) {
       if (isSchemaMissingError(setupError)) {
         return respond({
+          component: "STANDARD_CHAT",
+          data: {
+            text: "The app is running, but the database migration has not been applied yet. Apply `supabase/migrations/20260623000000_memory_intelligence_layer.sql`, then refresh.",
+            isMemorySaved: false,
+            suggestedFollowUps: [],
+          },
           type: "setup_required",
-          response:
-            "The app is running, but the new memory intelligence database migration has not been applied yet. Apply `supabase/migrations/20260623000000_memory_intelligence_layer.sql`, then refresh this page to use automatic topic tagging, graph connections, teach mode, and weekly summaries.",
+          response: "Database setup required.",
           saved: false,
           setupRequired: true,
         });
       }
 
       throw setupError;
+    }
+
+    // CODE REVIEW DETECTION
+    if (isCodeReviewRequest(inputText)) {
+      const codeReview = await buildCodeReviewResponse(inputText);
+      return respond({
+        ...codeReview,
+        type: "code_review",
+        response: codeReview.data.summary ?? codeReview.data.text,
+        saved: false,
+      });
     }
 
     if (isWeeklySummaryCommand(inputText)) {
@@ -362,6 +455,12 @@ export async function POST(req: Request) {
       });
 
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: weekly.summary,
+          isMemorySaved: true,
+          suggestedFollowUps: ["What are my weak topics?", "Teach me about a gap"],
+        },
         type: "weekly_summary",
         response: weekly.summary,
         saved: true,
@@ -391,6 +490,15 @@ export async function POST(req: Request) {
           : null;
 
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: teach.response,
+          isMemorySaved: generatedSave?.memorySaved ?? false,
+          suggestedFollowUps: [
+            `Do I know about ${teachTopic}?`,
+            `What else should I learn about ${teachTopic}?`,
+          ],
+        },
         type: "teach_mode",
         response: teach.response,
         knowledgeStatus: teach.knowledgeStatus,
@@ -407,17 +515,25 @@ export async function POST(req: Request) {
     const classification = await classifyInput(inputText);
     const isQuestion = classification.intent === "question";
 
+    // ACKNOWLEDGEMENT FILTER
     if (
       classification.intent === "acknowledgement" ||
       isVeryShortAcknowledgement(inputText, classification.intent)
     ) {
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: "Got it! Let me know if there's anything else I can help with.",
+          isMemorySaved: false,
+          suggestedFollowUps: ["What should I learn next?", "Show my weekly summary"],
+        },
         type: "note",
-        response: "I understand. How can I help you?",
+        response: "Got it! Let me know if there's anything else I can help with.",
         message: "Acknowledged",
       });
     }
 
+    // KNOWLEDGE MATCHING
     const knowledgeTopic = parseKnowledgeTopic(inputText);
     if (knowledgeTopic) {
       const gap = await detectKnowledgeGap({
@@ -440,13 +556,21 @@ export async function POST(req: Request) {
         });
       }
 
+      const confidenceScore =
+        gap.status === "known" ? 90 :
+        gap.status === "partial" ? 55 : 10;
+
       return respond({
-        type: "knowledge_gap",
-        response: formatKnowledgeGapResponse({
+        component: "KNOWLEDGE_CHECK",
+        data: {
           topic: knowledgeTopic,
-          gap,
-          newLesson,
-        }),
+          confidenceScore,
+          status: gap.status === "known" ? "proficient" : gap.status === "partial" ? "developing" : "new",
+          explanation: formatKnowledgeGapResponse({ topic: knowledgeTopic, gap, newLesson }),
+          relatedMemoriesCount: gap.relatedMemories.length,
+        },
+        type: "knowledge_gap",
+        response: formatKnowledgeGapResponse({ topic: knowledgeTopic, gap, newLesson }),
         knowledgeStatus: gap.status,
         knownPoints: gap.knownPoints,
         missingPoints: gap.missingPoints,
@@ -481,6 +605,12 @@ export async function POST(req: Request) {
       });
 
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: coachingResponse,
+          isMemorySaved: goalSave.memorySaved,
+          suggestedFollowUps: ["Tell me more", "Save this plan", "What's my weakest topic?"],
+        },
         type: "coaching",
         response: coachingResponse,
         saved: goalSave.memorySaved,
@@ -500,13 +630,16 @@ export async function POST(req: Request) {
       });
 
       if (relatedMemories.length > 0) {
-        const storedAnswer = await answerFromStoredMemories(
-          inputText,
-          relatedMemories
-        );
+        const storedAnswer = await answerFromStoredMemories(inputText, relatedMemories);
 
         if (!answerWasNotInStoredInfo(storedAnswer)) {
           return respond({
+            component: "STANDARD_CHAT",
+            data: {
+              text: storedAnswer,
+              isMemorySaved: false,
+              suggestedFollowUps: ["Tell me more", "Save this as a note"],
+            },
             type: "question",
             response: storedAnswer,
             answer: storedAnswer,
@@ -521,6 +654,12 @@ export async function POST(req: Request) {
       const answer = await generateWithWebSearch(inputText);
 
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: answer,
+          isMemorySaved: false,
+          suggestedFollowUps: ["Save this", "Tell me more"],
+        },
         type: "question",
         response: answer,
         answer,
@@ -535,6 +674,12 @@ export async function POST(req: Request) {
       const answer = await generateWithWebSearch(inputText);
 
       return respond({
+        component: "STANDARD_CHAT",
+        data: {
+          text: answer,
+          isMemorySaved: false,
+          suggestedFollowUps: [],
+        },
         type: "chat",
         response: answer,
         answer,
@@ -552,6 +697,12 @@ export async function POST(req: Request) {
     });
 
     return respond({
+      component: "STANDARD_CHAT",
+      data: {
+        text: buildSaveResponse(memorySave),
+        isMemorySaved: memorySave.memorySaved,
+        suggestedFollowUps: ["What do I know about this topic?", "Weekly summary"],
+      },
       type: "note",
       response: buildSaveResponse(memorySave),
       message: memorySave.memorySaved ? "Memory saved" : "Memory save failed",

@@ -2,23 +2,22 @@
 
 @theme inline {
   --font-sans: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Fira Code', monospace;
 }
 
 :root {
-  color-scheme: dark;
-  --background: #070a12;
-  --surface: #0d1220;
-  --surface-elevated: #121a2b;
-  --surface-muted: #172033;
-  --border: rgba(148, 163, 184, 0.16);
-  --border-strong: rgba(125, 170, 255, 0.34);
-  --text: #f7faff;
-  --text-muted: #93a1b8;
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --accent-soft: rgba(59, 130, 246, 0.16);
-  --glow: rgba(37, 99, 235, 0.3);
+  color-scheme: light;
+  --background: #f8f7f4;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-muted: #f0eeea;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.24);
+  --text: #0f0f0f;
+  --text-muted: #6b6b6b;
+  --accent: #0f0f0f;
+  --accent-strong: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.06);
 }
 
 html,
@@ -42,10 +41,8 @@ body {
 code,
 pre,
 kbd,
-samp,
-.font-mono,
-.code-block * {
-  font-family: var(--font-andika), ui-sans-serif, system-ui, sans-serif;
+samp {
+  font-family: ui-monospace, 'SF Mono', 'Fira Code', monospace;
 }
 
 button,
@@ -56,82 +53,76 @@ select {
 }
 
 .app-stage {
-  background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent 34rem),
-    radial-gradient(circle at 18% 12%, rgba(34, 211, 238, 0.12), transparent 28rem),
-    var(--background);
+  background: var(--background);
 }
 
 .nav-shell {
-  background: rgba(13, 18, 32, 0.88);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(18px);
 }
 
 .brand-mark {
-  background: linear-gradient(145deg, rgba(59, 130, 246, 0.28), rgba(34, 211, 238, 0.12));
-  color: #dceaff;
+  background: #0f0f0f;
+  color: #ffffff;
 }
 
 .nav-action {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: #0f0f0f;
 }
 
 .nav-action:hover {
-  background: linear-gradient(135deg, #60a5fa, #2563eb);
+  background: #2a2a2a;
 }
 
 .icon-action {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .sidebar-panel {
-  background: rgba(9, 13, 24, 0.92);
-  backdrop-filter: blur(24px);
+  background: #ffffff;
 }
 
 .chat-shell {
-  background: rgba(10, 15, 28, 0.74);
+  background: rgba(248, 247, 244, 0.7);
   backdrop-filter: blur(22px);
 }
 
 .chat-scroll {
-  background:
-    radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.08), transparent 25rem),
-    rgba(7, 10, 18, 0.38);
+  background: var(--background);
 }
 
 .composer-zone {
-  background: rgba(10, 15, 28, 0.88);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(18px);
 }
 
 .composer-shell {
-  background: rgba(18, 26, 43, 0.92);
+  background: #ffffff;
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease;
 }
 
 .composer-shell:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+  border-color: rgba(0, 0, 0, 0.24);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
 }
 
 .send-button:not(:disabled) {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: #0f0f0f;
 }
 
 .assistant-avatar {
-  background: var(--accent-soft);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .prompt-card {
-  background: rgba(18, 26, 43, 0.74);
+  background: #ffffff;
 }
 
 .messages-container {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+  scrollbar-color: rgba(0, 0, 0, 0.14) transparent;
   overscroll-behavior: contain;
 }
 
@@ -145,12 +136,12 @@ select {
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.38);
+  background-color: rgba(0, 0, 0, 0.14);
   border-radius: 999px;
 }
 
 .messages-container::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(148, 163, 184, 0.6);
+  background-color: rgba(0, 0, 0, 0.26);
 }
 
 .chat-markdown,
